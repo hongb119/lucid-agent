@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  # 1. AI 에이전트 백엔드 (FastAPI)
+  agent-backend:
+    image: python:3.9-slim
+    container_name: lucid_agent_be
+    volumes:
+      - ./backend:/app
+    working_dir: /app
+    ports:
+      - "8080:8000" # 아파치가 8080으로 찌르면 컨테이너 내부 8000으로 전달
+    # 실서버 MariaDB가 도커 외부(호스트)에 있으므로 호스트 IP 연결 설정
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: >
+      bash -c "pip install fastapi uvicorn mysql-connector-python openai python-dotenv pydub sqlalchemy python-multipart && 
+               uvicorn main:app --host 0.0.0.0 --port 8000"
+    networks:
+      - lucid-network
+
+  # 2. AI 에이전트 프론트엔드 (React/Vite)
+  agent-frontend:
+    image: node:20-slim
+    container_name: lucid_agent_fe
+    volumes:
+      - ./frontend:/app
+    working_dir: /app
+    ports:
+      - "5173:3000" # 아파치가 5173으로 찌르면 컨테이너 내부 3000으로 전달
+    command: sh -c "npm install && npm run build && npx vite preview --host 0.0.0.0 --port 3000"
+    networks:
+      - lucid-network
+
+networks:
+  lucid-network:
+    driver: bridge

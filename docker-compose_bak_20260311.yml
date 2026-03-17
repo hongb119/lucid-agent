@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  # Nginx: 아파치(80)와 충돌을 피하기 위해 외부 포트 8001 사용
+  lucid-proxy:
+    image: nginx:latest
+    container_name: lucid_proxy
+    ports:
+      - "8001:80"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d
+    depends_on:
+      - agent-frontend
+      - itembank-frontend
+
+  # 1. 기존 AI 에이전트 BE
+  agent-backend:
+    image: python:3.9-slim
+    container_name: lucid_agent_be
+    volumes:
+      - ./backend:/app
+    working_dir: /app
+    ports:
+      - "8080:8000"
+    command: >
+      bash -c "pip install fastapi uvicorn mysql-connector-python openai python-dotenv pydub sqlalchemy python-multipart && 
+               uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+
+  # 2. 기존 AI 에이전트 FE
+  agent-frontend:
+    image: node:20-slim
+    container_name: lucid_agent_fe
+    volumes:
+      - ./frontend:/app
+    working_dir: /app
+    ports:
+      - "5173:3000"
+    command: sh -c "npm install && npx vite --host 0.0.0.0 --port 3000"
+
+  # 3. [신규] ItemBank BE
+  itembank-backend:
+    image: python:3.9-slim
+    container_name: item_be
+    volumes:
+      - ./item-backend:/app  # <-- 이 폴더명도 실제 폴더명과 맞는지 꼭 확인하세요!
+    working_dir: /app
+    ports:
+      - "8081:8000"
+    environment:
+      - DB_HOST=host.docker.internal
+    command: >
+      bash -c "pip install fastapi uvicorn sqlalchemy mysql-connector-python python-dotenv && 
+               uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+
+  # 4. [신규] ItemBank FE
+  itembank-frontend:
+    image: node:20-slim
+    container_name: item_fe
+    volumes:
+      - ./item-frontend:/app  # [수정] 실제 폴더 이름인 item-frontend로 변경
+    working_dir: /app
+    ports:
+      - "5174:5173"           # [수정] Vite 기본 포트인 5173을 밖으로 5174로 연결
+    command: sh -c "npm install && npx vite --host 0.0.0.0 --port 5173" # [수정] 내부 포트 5173 사용

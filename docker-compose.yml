@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  # 1. Nginx Proxy (기존 유지)
+  lucid-proxy:
+    image: nginx:latest
+    container_name: lucid_proxy
+    ports:
+      - "8001:80"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d
+    depends_on:
+      - agent-frontend
+      - itembank-frontend
+      - agent-backend
+      - itembank-backend
+    networks:
+      - lucid-network
+
+  # 2. AI 에이전트 백엔드 (8080)
+  agent-backend:
+    image: python:3.9-slim
+    container_name: lucid_agent_be
+    volumes:
+      - ./backend:/app
+    working_dir: /app
+    ports:
+      - "8080:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: >
+      bash -c "pip install fastapi uvicorn mysql-connector-python openai python-dotenv pydub sqlalchemy python-multipart && 
+               uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+    networks:
+      - lucid-network
+
+  # 3. 아이템뱅크 백엔드
+  itembank-backend:
+    image: python:3.9-slim
+    container_name: itembank_be
+    volumes:
+      - ./backend:/app
+    working_dir: /app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: >
+      bash -c "pip install fastapi uvicorn mysql-connector-python && 
+               uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+    networks:
+      - lucid-network
+
+  # 4. AI 에이전트 프론트엔드 (Hot Reload 추가)
+  agent-frontend:
+    image: node:20-slim
+    container_name: lucid_agent_fe
+    volumes:
+      - ./frontend:/app
+    working_dir: /app
+    ports:
+      - "5173:5173"
+    environment:
+      - CHOKIDAR_USEPOLLING=true # Vite 파일 감시 활성화
+      - VITE_WATCH_USE_POLLING=true
+    command: sh -c "npm install && npx vite --host 0.0.0.0 --port 5173"
+    networks:
+      - lucid-network
+
+  # 5. 아이템뱅크 프론트엔드
+  itembank-frontend:
+    image: node:20-slim
+    container_name: itembank_fe
+    volumes:
+      - ./frontend:/app
+    working_dir: /app
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+    command: sh -c "npm install && npx vite --host 0.0.0.0 --port 5173"
+    networks:
+      - lucid-network
+
+networks:
+  lucid-network:
+    driver: bridge

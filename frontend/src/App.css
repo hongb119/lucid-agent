@@ -1,0 +1,14 @@
+@import "tailwindcss";
+
+/* 브라우저 기본 마진 제거 및 전체 너비 확보 */
+:root, body, #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-height: 100vh;
+  display: block; /* 기본 flex 설정을 해제합니다 */
+}
+
+body {
+  overflow-x: hidden;
+}

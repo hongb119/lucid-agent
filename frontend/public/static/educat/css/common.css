@@ -1,0 +1,135 @@
+@charset "utf-8";
+/* CSS Document */
+/* 폰트 파일 경로 강제 지정 */
+@font-face {
+    font-family: 'GmarketSansLight';
+    src: url('/static/educat/fonts/GmarketSansLight.woff2') format('woff2'),
+         url('/static/educat/fonts/GmarketSansLight.woff') format('woff'),
+         url('/static/educat/fonts/GmarketSansLight.ttf') format('truetype');
+}
+
+@font-face {
+    font-family: 'GmarketSansBold';
+    src: url('/static/educat/fonts/GmarketSansBold.woff2') format('woff2'),
+         url('/static/educat/fonts/GmarketSansBold.woff') format('woff'),
+         url('/static/educat/fonts/GmarketSansBold.ttf') format('truetype');
+}
+
+/* skip */
+#skipnav {overflow:hidden; position:absolute; width:100%; z-index:1000;}
+#skipnav a {display:block; overflow:hidden; height:1px; width:1px; margin:0 -1px -1px 0; font-size:0; line-height:0; text-align:center;}
+#skipnav a:focus, #skipnav a:hover, #skipnav a:active {width:auto; height:20px; margin:0; padding:8px 0 5px; background:#20262c; font-size:12px; font-weight:700; line-height:1; color:#fff;}
+
+.skip_info {display:block; position:absolute; overflow:hidden; width:1px; height:1px; font-size:0; line-height:0; text-indent:100%;}
+
+/* Sprite */
+.icons::before, .es, 
+.paging .page_bt::after, .chkbox input:checked+i::before, 
+.info_txt::before {content:''; background-image:url(../images/icons.png); background-repeat:no-repeat; background-size:200px;}
+
+/* header ------------------------------- */
+header {background:#22345e; height:57px; display:flex; align-items:center; position:relative; z-index:2;}
+header h1 {color:#fff; font-size:18px; font-weight:500; padding:0 30px;}
+.user_info {background:#fff; color:#22345e; font-size:16px; font-weight:700; padding:20px 30px; position:relative; display:flex; align-items: center;}
+.user_info em {font-style:normal; width:calc(100% - 30px)}
+.user_info span {width:30px;}
+
+.user_func {position:absolute; right:20px; height:57px; display:flex; align-items:center; z-index:2;}
+.user_func button {background:none; border:1px solid rgba(255,255,255,0.5); color:#fff; width:30px; height:30px; padding:0; display:flex; align-items:center; justify-content:center;}
+.user_func button i {font-size:18px;}
+.user_func button > span {display:block; height:13px; margin:0 auto; text-indent:-9999px;}
+
+/* gnb */
+#gnb {border-top:1px solid #ddd; margin:0;}
+#gnb > li {position:relative;}
+#gnb > li > a {display:block; border-bottom:1px solid #ddd; color:#22345e; font-size:18px; font-weight:500; padding:14px 30px; position:relative; transition: .2s;}
+#gnb > li.has_sub > a::after {content:'\e5cf'; display:block; font-size:24px; font-family: 'Material Icons'; -webkit-font-feature-settings: 'liga'; position:absolute; right:15px; top:0.5em; z-index:1;}
+#gnb > li.has_sub > a.on::after {content:'\e5ce';}
+#gnb > li > a i {position:absolute; top:21px; left:30px; font-size:14px;}
+#gnb > li > a.on {background:#fff; margin-right:1px; /* background:#5750ec; border-bottom-color:transparent; color:#fff; */}
+#gnb > li > ul {display:none; background:#fff; border-bottom:1px solid #ddd; padding:15px 30px; margin-right:1px; position:relative;}
+#gnb > li > ul::before {content:''; background:#01ace0; width:4px; height:100%; position:absolute; top:0; left:0;}
+#gnb > li > ul > li > a {display:block; color:#22345e; font-size:16px; font-weight:300; padding:5px 0; position:relative; transition:all .2s; -webkit-transition:all .2s;}
+#gnb > li > ul > li > a.on, #gnb > li > ul > li > a.on:hover {font-weight:600;}
+#gnb > li > ul > li > a.on::before, #gnb > li > ul > li > a.on:hover::before {background-position:-48px 0; width:7px; height:11px; position:absolute; top:10px; left:0;}
+
+/* 상단메뉴 */
+.tmenu {overflow:hidden;}
+.tmenu ul {float:right;}
+.tmenu li {float:left;}
+.tmenu li a {display:block; color:#333; padding:15px 8px; font-weight:300;}
+.tmenu li a.tm_logout {background-image:none;}
+
+/* fixed */
+header.fixed {transition:all 0.2s ease-in-out; -webkit-transition:all 0.2s ease-in-out; position:fixed; background:rgba(255,255,255,1); z-index:20; box-shadow:0px 4px 12px rgba(0,0,0,0.1);}
+
+/* 모바일 전체메뉴 */
+.toggleMenu, .spinner-master input[type=checkbox] {display:none;}
+.toggleMenu {position:absolute; top:15px; left:20px; width:24px; height:27px;}
+.toggleMenu.active {left:auto; right:83%;}
+.spinner-master * {transition:all 0.3s; box-sizing:border-box;}
+.spinner-master label {cursor:pointer; position:absolute; z-index:99; height:100%; width:100%; top:5px; left:0;}
+.spinner-master .spinner {position:absolute; height:2px; width:100%; padding:0; background-color:rgba(255,255,255,1);}
+.spinner-master .diagonal.part-1 {position:relative; float:left;}
+.spinner-master .horizontal {position:relative; float:left; margin-top:5px;}
+.spinner-master .diagonal.part-2 {position:relative; float:left; margin-top:5px;}
+.spinner-master.active input[type=checkbox] ~ .spinner-spin > .spinner {}
+.spinner-master.active input[type=checkbox] ~ .spinner-spin > .horizontal {opacity:0;}
+.spinner-master.active input[type=checkbox] ~ .spinner-spin > .diagonal.part-1 {transform:rotate(135deg); -webkit-transform:rotate(135deg); margin-top:9px;}
+.spinner-master.active input[type=checkbox] ~ .spinner-spin > .diagonal.part-2 {transform:rotate(-135deg); -webkit-transform:rotate(-135deg); margin-top:-9px;}
+
+.innerwrap {max-width:1100px; margin:0 auto; position:relative;}
+
+/* 로그인 ------------------------------- */
+#login_wrap * {font-family: 'Noto Sans KR', sans-serif; font-weight:400; letter-spacing:0; box-sizing:border-box;}
+#login_wrap {/* background:#f2f2f2 url(../images/login_bg.gif) 0 0 no-repeat; background-size:cover; */ background:#e8eef6; width:100%; min-height:100%; padding:15px; overflow:auto; text-align:center; display:flex; align-items:center; justify-content:center; box-sizing:border-box;}
+
+#login_box {display:inline-block; vertical-align:middle; width:95%; max-width:500px; margin:0 auto; overflow:hidden; position:relative; z-index:1;}
+#login_box h2 {font-size:22px; font-weight:500; color:#222; width:45%; margin:0 auto; position:relative;}
+#login_box h2 img {max-height:72px;}
+#login_box h2 i {display:block; font-size:10px; color:#777; font-weight:300;}
+#login_box h2 + p {font-size:36px; line-height:1; color:#333; font-family:Arial, Helvetica, sans-serif, Dotum; font-weight:bold;}
+#login_box h2 + p i {color:#3966de; font-weight:bold;}
+#login_box h2 + p > span {display:block; font-size:24px; color:#222; font-weight:bold;}
+#login_box .login_con {max-width:360px; margin:0 auto;}
+#login_box .login_input {margin:30px 0 0 0;}
+#login_box .login_input ul li {}
+#login_box .login_input ul li + li {margin-top:7px;}
+#login_box .login_input ul li input {border:1px solid #eee; border-radius:50px; margin:0; font-size:14px; padding:0px 20px; width:100%; height:48px;}
+#login_box .login_btn {background:#274998; border:0; border-bottom:solid 3px #22345e; border-radius:50px; width:100%; height:54px; line-height:54px; font-size:16px; color:#fff; text-align:center; margin:20px 0 0;}
+#login_box .login_input ul li input::-webkit-input-placeholder {color:#999; font-size:14px;}/* Webkit */
+#login_box .login_input ul li input:-moz-placeholder {color:#999; font-size:14px;}/* moz */
+#login_box .login_input ul li input:-ms-input-placeholder {color:#999; font-size:14px;}/* IE10+ */
+#login_wrap .copyright {color:#888; font-size:12px; margin-top:30px; text-align:center;}
+
+@media screen and (max-width:1100px) {
+.innerwrap {margin-left:20px; margin-right:20px;}
+}
+
+@media screen and (max-width:980px) {
+header {justify-content:center;}
+header h1 {padding:0 20px;}
+.user_info {color:#172850; padding:0 20px;}
+
+/* gnb */
+#gnb {border:0; padding:0; margin:20px 15px 15px 15px; float:none;}
+#gnb > li > a {color:#111; height:auto; line-height:normal; padding:14px 20px; text-align:left;}
+#gnb > li > ul {background:none; padding:10px 20px;}
+#gnb > li > ul > li > a {color:#555 !important; padding-left:0 !important;}
+#gnb > li > ul > li > a::before {display:none;}
+
+/* 상단메뉴 */
+.tmenu ul {margin:16px 45px 0;}
+.tmenu li:first-child {display:none;}
+.tmenu li a {font-size:12px;}
+.tmenu li a.tm_logout {background-image:url(../images/icons.png); background-position:0 -110px; width:12px; height:16px; padding:0; text-indent:-9999px;}
+
+/* 모바일 전체메뉴 */
+.toggleMenu {display:block;}
+.gnb_overlay.on {position:fixed; z-index:9; top:0; width:100%; height:100%; background:rgba(0,0,0,0.5);}
+#sidebar > div.mb_menu_top {position:fixed; z-index:12; top:0; right:0; margin-top:0; width:80%; height:100%; overflow:auto; background:#fff; display:block;}
+.mb_menu_top .top_logo {display:none;}
+#gnb, .user_info {display:none;}
+.mb_gnb {display:block !important;}
+.mb_info {display:flex; margin-top:30px;}
+}
