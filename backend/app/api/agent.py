@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Body, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
+import json  # 파일 최상단으로 이동 (들여쓰기 오류 방지)
+from datetime import datetime
 
-from app.database import get_db, get_db_connection,db_config
+from app.database import get_db, get_db_connection, db_config
 from app.api.study_logic import get_unit_context, get_automatic_context
 from app.api.ai_logic import (
     ask_agent_with_context, 
@@ -14,10 +16,9 @@ from app.api.ai_logic import (
 
 router = APIRouter()
 
-# --- 422 에러 방지 및 파라미터 수신을 위한 모델 정의 ---
 class WelcomeRequest(BaseModel):
     user_id: str
-    task_id: Optional[int] = None
+    task_id: Optional[str] = None  # int 대신 str로 변경 (안전성 확보)
     branch_code: Optional[str] = None
     re_study: Optional[str] = "N"
     re_study_no: Optional[int] = 0
@@ -38,13 +39,15 @@ def get_unit_analysis(study_no: str):
 
         target_sentence = sentences[0]['study_eng']
         chunks_data = analyze_sentence_to_chunks(target_sentence)
+        
         return {"status": "success", "data": {"unit": study_no, "chunks": chunks_data['chunks']}}
     except Exception as e:
+        print(f"❌ Unit Analysis Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if connection: connection.close()
 
-# 2. AI 질문 답변 (로그인 사용자만 저장 - 원본 로직 유지)
+# 2. AI 질문 답변
 @router.post("/ask")
 async def ask_question(
     user_id: str = Body(None), 
@@ -54,26 +57,21 @@ async def ask_question(
     connection = None
     unit_context = None
     
-    # [방어막 1] 문맥 파악 단계 에러가 전체 로직을 죽이지 않도록 처리
     try:
         if study_no and str(study_no).strip():
             unit_context = get_unit_context(study_no)
         elif user_id and str(user_id).strip():
             unit_context = get_automatic_context(user_id)
     except Exception as context_e:
-        print(f"⚠️ Context Fetch Failed (Ignoring): {context_e}")
+        print(f"⚠️ Context Fetch Failed: {context_e}")
 
     try:
-        # AI 답변 생성
         ai_answer = ask_agent_with_context(question, unit_context)
 
-        # [방어막 2] 사용자 코드가 있을 때만 저장 진행
         if user_id and str(user_id).strip():
             try:
                 connection = get_db_connection()
                 cursor = connection.cursor()
-                
-                # 최종 study_no 결정
                 final_study_no = study_no if study_no else (unit_context['study_no'] if unit_context else None)
                 
                 log_sql = """
@@ -83,23 +81,16 @@ async def ask_question(
                 """
                 cursor.execute(log_sql, (user_id, final_study_no, 'CHAT', question, ai_answer))
                 connection.commit()
-                print(f"✅ User({user_id}) 대화 로그 저장 완료")
             except Exception as db_e:
                 print(f"⚠️ DB Save Error: {db_e}")
-                if connection: connection.rollback()
         
         return {"status": "success", "answer": ai_answer}
-
     except Exception as e:
-        print(f"❌ Critical Error: {str(e)}")
-        raise HTTPException(status_code=500, detail="AI 처리 중 오류가 발생했습니다.")
+        raise HTTPException(status_code=500, detail="AI 처리 오류")
     finally:
-        # PoolError 방지를 위한 안전한 닫기
-        if connection:
-            try: connection.close()
-            except: pass
+        if connection: connection.close()
 
-# 3. OCR 이미지 분석 (로깅 포함 원본 유지)
+# 3. OCR 이미지 분석
 @router.post("/ocr")
 async def process_ocr(image: str = Body(...), user_id: str = Body(None)):
     connection = None
@@ -108,7 +99,11 @@ async def process_ocr(image: str = Body(...), user_id: str = Body(None)):
         if user_id and str(user_id).strip():
             connection = get_db_connection()
             cursor = connection.cursor()
-            log_sql = "INSERT INTO splucid_ai_agent_log (user_id, question_type, student_query, ai_answer) VALUES (%s, %s, %s, %s)"
+            log_sql = """
+                INSERT INTO splucid_ai_agent_log 
+                (user_id, question_type, student_query, ai_answer) 
+                VALUES (%s, %s, %s, %s)
+            """
             cursor.execute(log_sql, (user_id, 'OCR', '[이미지 분석 요청]', answer))
             connection.commit()
         return {"status": "success", "answer": answer}
@@ -116,83 +111,84 @@ async def process_ocr(image: str = Body(...), user_id: str = Body(None)):
         if connection: connection.rollback()
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        if connection:
-            try: connection.close()
-            except: pass
-
-# 4. 학생 맞춤형 환영 인사말 조회 (기존 Body 방식 유지)
-@router.post("/welcome-message")
-async def get_welcome_message(user_id: str = Body(...)):
-    connection = None
-    try:
-        connection = get_db_connection()
-        cursor = connection.cursor(dictionary=True)
-        
-        sql = """
-            SELECT study_step2_name, study_name, study_fail_tcnt, task_status
-            FROM splucid_task
-            WHERE user_id = %s
-            ORDER BY task_save_date DESC
-            LIMIT 1
-        """
-        cursor.execute(sql, (user_id,))
-        last_task = cursor.fetchone()
-
-        if last_task:
-            context = {
-                "book": last_task['study_step2_name'],
-                "unit": last_task['study_name'],
-                "fails": last_task['study_fail_tcnt'],
-                "status": last_task['task_status']
-            }
-            greeting = generate_personalized_greeting(context)
-        else:
-            greeting = "반가워! 오늘부터 나랑 같이 즐겁게 영어 공부 시작해볼까? 😊"
-
-        return {"status": "success", "message": greeting}
-    except Exception as e:
-        return {"status": "fail", "message": "오늘도 화이팅! 공부하다 궁금한 건 물어봐. ✨"}
-    finally:
         if connection: connection.close()
+        
 
-# 5. 개인화 인사말 + 오늘의 추천 단어 통합 (Pydantic 모델 적용으로 422 에러 해결)
 @router.post("/welcome-personalized")
 async def get_welcome_personalized(req: WelcomeRequest):
     connection = None
     user_id = req.user_id
+    
+    # [개선] 초기 기본값 설정 (에러 대비)
+    res_data = {
+        "status": "success",
+        "greeting": "안녕! 오늘도 즐겁게 공부해봐요!",
+        "recommendation": None
+    }
+
     try:
         connection = get_db_connection()
         cursor = connection.cursor(dictionary=True)
         
-        # 💡 [핵심] 학생 실명 조회 (테이블명 user_name 컬럼 확인 필요)
+        # 1. 학생 실명 조회
         cursor.execute("SELECT user_name FROM splucid_user WHERE user_id = %s", (user_id,))
         user_res = cursor.fetchone()
-        real_name = user_res['user_name'] if user_res else "친구"
+        
+        # [수정] "이세희 Molly" -> "이세희" (공백이 있으면 앞부분만 추출)
+        raw_name = user_res['user_name'] if user_res else "친구"
+        clean_name = raw_name.split(' ')[0] if raw_name else "친구"
 
-        # 최근 태스크 조회
+        # 2. 최신 학습 정보 조회
         cursor.execute("""
-            SELECT study_step2_name, task_status FROM splucid_task 
-            WHERE user_id = %s ORDER BY task_save_date DESC LIMIT 1
+            SELECT study_step2_name, task_status 
+            FROM splucid_task 
+            WHERE user_id = %s 
+            ORDER BY task_day DESC, task_id DESC 
+            LIMIT 1
         """, (user_id,))
         last_task = cursor.fetchone()
 
         user_context = {
-            "name": real_name,
+            "name": clean_name,
             "book": last_task['study_step2_name'] if last_task else "루시드 영어",
             "status": last_task['task_status'] if last_task else 'Y'
         }
 
-        # AI 인사말 및 단어 생성
-        greeting = generate_personalized_greeting(user_context)
-        recommendation = get_daily_recommended_word(user_context)
+        # 3. 인사말 및 단어 생성 (요청하신 대로 간결하게 수정)
+        # AI 생성 대신 직접 포맷팅하여 속도와 정확도 확보
+        greeting = f"안녕, {clean_name}! 오늘도 화이팅!"
+        
+        # [주의] 인자 없이 호출하도록 수정됨
+        recommendation = get_daily_recommended_word()
 
-        return {
-            "status": "success",
-            "greeting": greeting,
-            "recommendation": recommendation
-        }
+        # 4. 로그 저장 로직
+        try:
+            rec_json_str = json.dumps(recommendation, ensure_ascii=False) if recommendation else "{}"
+            
+            log_sql = """
+                INSERT INTO splucid_ai_agent_log 
+                (user_id, question_type, student_query, ai_answer, chunk_json) 
+                VALUES (%s, %s, %s, %s, %s)
+            """
+            cursor.execute(log_sql, (
+                user_id, 
+                'WORD', 
+                f"Welcome for {user_context['book']}", 
+                greeting, 
+                rec_json_str
+            ))
+            connection.commit()
+        except Exception as log_e:
+            print(f"⚠️ Log Insert Error (Ignored): {log_e}")
+
+        # 최종 데이터 반영
+        res_data["greeting"] = greeting
+        res_data["recommendation"] = recommendation
+        return res_data
+
     except Exception as e:
-        print(f"❌ Error: {e}")
-        return {"status": "fail", "greeting": "안녕! 오늘도 같이 즐겁게 공부하자! 😊"}
+        print(f"❌ Critical Error in welcome-personalized: {str(e)}")
+        return res_data # 에러 시에도 기본 greeting이 담긴 res_data 반환
     finally:
-        if connection: connection.close()
+        if connection:
+            connection.close()

@@ -84,7 +84,44 @@ async def analyze_speaking(target_text: str = Form(...), audio_file: UploadFile 
     finally:
         if save_path.exists(): save_path.unlink()
 
-# 3. 최종 저장 (지점코드 연동)
+# 3. 언스크램블 정답 검증
+@router.post("/check-unscramble")
+async def check_unscramble(study_item_no: int = Form(...), input_text: str = Form(...)):
+    try:
+        # 데이터베이스에서 정답 문장 조회
+        cursor = get_db().cursor(dictionary=True)
+        sql = "SELECT study_eng, study_unscramble FROM splucid_study_sentence WHERE study_item_no = %s"
+        cursor.execute(sql, (study_item_no,))
+        result = cursor.fetchone()
+        cursor.close()
+        
+        if not result:
+            raise HTTPException(status_code=404, detail="Study item not found")
+        
+        # 언스크램블용 문장이 있으면 사용, 없으면 원본 문장 사용
+        target_text = result['study_unscramble'] or result['study_eng']
+        
+        # 정규화 함수: 대소문자, 문장부호, 공백 정리
+        def normalize_text(text):
+            import re
+            # 소문자 변환, 문장부호 제거, 연속된 공백을 단일 공백으로, 양쪽 공백 제거
+            return re.sub(r'[^\w\s]', '', text.lower()).strip()
+        
+        normalized_input = normalize_text(input_text)
+        normalized_target = normalize_text(target_text)
+        
+        is_correct = normalized_input == normalized_target
+        
+        return {
+            "is_correct": is_correct,
+            "input_normalized": normalized_input,
+            "target_normalized": normalized_target,
+            "target_original": target_text
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 4. 최종 저장 (지점코드 연동)
 @router.post("/complete")
 async def complete_drill(payload: DrillCompleteRequest, db = Depends(get_db)):
     cursor = db.cursor(dictionary=True)

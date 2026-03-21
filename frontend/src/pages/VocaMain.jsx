@@ -1,5 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useContext } from 'react'; // 1. useContext 추가
 import axios from 'axios';
+import { AgentContext } from '../App'; // 2. App에서 만든 컨텍스트 임포트
+
 import VocaIntro from './VocaIntro';
 import VocaDictation from './VocaDictation';
 import VocaFinish from './VocaFinish'; 
@@ -7,10 +9,14 @@ import VocaQuiz from './VocaQuiz';
 import VocaTotalFinish from './VocaTotalFinish';
 
 const VocaMain = () => {
+    // 3. 에이전트 리모컨(triggerAgent) 가져오기
+    const { triggerAgent } = useContext(AgentContext);
+
     const queryParams = new URLSearchParams(window.location.search);
     const taskId = queryParams.get('task_id');
     const userId = queryParams.get('user_id');
     const reStudy = queryParams.get('re_study') || 'N';
+    const branchCode = queryParams.get('branch_code'); // 추가
 
     const [mode, setMode] = useState('START'); 
     const [words, setWords] = useState([]);
@@ -20,15 +26,32 @@ const VocaMain = () => {
 
     const audioRef = useRef(new Audio());
 
-    // [iOS 핵심] 아이폰/아이패드 오디오 잠금 해제 (사용자 첫 클릭 시 실행)
     const unlockMobileAudio = () => {
         const audio = audioRef.current;
-        audio.src = "data:audio/wav;base64,UklGRigAAABXQVZRTU9O"; // 0.1초 묵음
+        audio.src = "data:audio/wav;base64,UklGRigAAABXQVZRTU9O"; 
         audio.play().then(() => {
             audio.pause();
             audio.currentTime = 0;
             console.log("🔊 Mobile Audio Unlocked");
         }).catch(e => console.warn("Audio unlock pending user interaction"));
+    };
+
+    // [수정 포인트] 학습 시작 시 에이전트 호출 함수
+    const handleStartStudy = () => {
+        // A. 기존 로직 (오디오 잠금 해제 및 모드 변경)
+        unlockMobileAudio();
+        setMode('STUDY');
+
+        // B. 에이전트 인사 호출 (추가)
+        if (triggerAgent) {
+            triggerAgent({
+            task_id: taskId,
+            user_id: userId,
+            branch_code: branchCode,
+            re_study: reStudy,
+            task_type: 'voca' // 보카 학습임을 알려줌
+            });
+        }
     };
 
     const handleExit = () => {
@@ -45,7 +68,6 @@ const VocaMain = () => {
     useEffect(() => {
         const init = async () => {
             try {
-                // 배포용 호스트네임 자동 대응
                 const res = await axios.get(`/api/voca/fetch-words`, {
                     params: { task_id: taskId, user_id: userId, re_study: reStudy }
                 });
@@ -120,7 +142,8 @@ const VocaMain = () => {
 
             <div className="educontainer" style={{ background: mode === 'START' ? "rgba(255,255,255,0.6)" : "none" }}>
                 {mode === 'START' && (
-                    <VocaIntro onStart={() => { unlockMobileAudio(); setMode('STUDY'); }} />
+                    // [수정] onStart를 새로 만든 handleStartStudy로 교체
+                    <VocaIntro onStart={handleStartStudy} />
                 )}
                 
                 {mode === 'STUDY' && (
@@ -153,7 +176,7 @@ const VocaMain = () => {
             </div>
             
             <style>{`
-                input, button { font-size: 16px !important; } /* 모바일 자동 줌 방지 */
+                input, button { font-size: 16px !important; }
                 #eduwrap { -webkit-overflow-scrolling: touch; }
                 .loading_box { display: flex; justify-content: center; align-items: center; height: 100vh; font-weight: bold; }
             `}</style>

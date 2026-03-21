@@ -1,16 +1,21 @@
 import React from 'react';
 
-const DictaIntro = ({ onStart }) => {
+const PhoneticsIntro = ({ onStart }) => {
+    console.log('=== PhoneticsIntro 렌더링 ===');
+    
     return (
         <div className="agent-ipad" style={{display:'block'}}>
             <div className="start_page">
-                <p className="t1">신나는 <span style={{color:'#6F6BE6', fontWeight:'bold'}}>LUCID DICTATION</span> 학습을 시작할게요.</p>
+                <p className="t1">신나는 <span style={{color:'#6F6BE6', fontWeight:'bold'}}>LUCID PHONETICS</span> 학습을 시작할게요.</p>
                 <p className="t2">준비가 되었으면 START 버튼을 클릭해주세요.</p>
                 {/* 클릭 시 부모 컴포넌트의 학습 시작 시간(startTime)이 기록됩니다. */}
                 <button 
                     type="button" 
                     className="start-button" 
-                    onClick={onStart}
+                    onClick={() => {
+                        console.log('START 버튼 클릭');
+                        onStart();
+                    }}
                     style={{
                         padding: '15px 40px',
                         fontSize: '18px',
@@ -40,4 +45,4 @@ const DictaIntro = ({ onStart }) => {
     );
 };
 
-export default DictaIntro;
+export default PhoneticsIntro;

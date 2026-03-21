@@ -1,16 +1,20 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef,useContext } from 'react';
 import axios from 'axios';
 import DictaIntro from './DictaIntro';
 import DictaScramble from './DictaScramble';
 import DictaFinish from './DictaFinish';
 import DictaQuiz from './DictaQuiz';
 import DictaTotalFinish from './DictaTotalFinish';
+import { AgentContext } from '../App'; // 2. App에서 만든 컨텍스트 임포트
 
 const DictaMain = () => {
+    // 3. 에이전트 리모컨(triggerAgent) 가져오기
+    const { triggerAgent } = useContext(AgentContext);
     const queryParams = new URLSearchParams(window.location.search);
     const taskId = queryParams.get('task_id');
     const userId = queryParams.get('user_id');
     const reStudy = queryParams.get('re_study') || 'N';
+    const branchCode = queryParams.get('branch_code'); // 지점 코드 추출
 
     const [mode, setMode] = useState('START'); 
     const [scrambleWords, setScrambleWords] = useState([]); 
@@ -34,6 +38,24 @@ const DictaMain = () => {
             silentAudio.pause();
             console.log("🔊 Mobile Audio Unlocked");
         }).catch(() => {});
+    };
+    // [로직 추가] 학습 시작 시 에이전트를 호출하는 공통 핸들러
+    const handleStartDictation = () => {
+        // A. 기존 로직 실행
+        unlockAudio();
+        setMode('SCRAMBLE');
+        setStudyStartTime(Date.now());
+
+        // B. 에이전트 인사 호출 (추가)
+        if (triggerAgent) {
+            triggerAgent({
+                task_id: taskId,
+                user_id: userId,
+                branch_code: branchCode,
+                re_study: reStudy,
+                task_type: 'dictation' // AI가 받아쓰기임을 인지하도록 타입 전달
+            });
+        }
     };
 
     useEffect(() => {

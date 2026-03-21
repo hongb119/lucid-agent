@@ -25,8 +25,6 @@ const VocaTotalFinish = ({ reportData, onRetry, onExit }) => {
                 boxShadow: '0 10px 30px rgba(0,0,0,0.05)',
                 marginBottom: '30px'
             }}>
-                <img src="/static/study/images/img_logo.png" alt="Finish" style={{ maxWidth: '150px', marginBottom: '20px' }} />
-                
                 <h2 style={{ fontSize: '28px', color: '#333', marginBottom: '10px' }}>Word Learning Report</h2>
                 <p style={{ color: '#888', marginBottom: '30px' }}>학습을 성공적으로 마쳤어요!</p>
 
