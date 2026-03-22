@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useContext } from 'react';
 import axios from 'axios';
+import { AgentContext } from '../App';
 
 // 컴포넌트 임포트
 import PhoneticsIntro from './PhoneticsIntro';
@@ -12,10 +13,11 @@ import PhoneticsRetry from './PhoneticsRetry';
 import PhoneticsResult from './PhoneticsResult';
 
 const PhoneticsMain = () => {
+    const { triggerAgent } = useContext(AgentContext);
     const queryParams = new URLSearchParams(window.location.search);
     const taskId = queryParams.get('task_id');
     const userId = queryParams.get('user_id');
-    const branchCode = queryParams.get('branch_code');
+    const branchCode = queryParams.get('branch_code') || 'MAIN';
     const initialReStudy = queryParams.get('re_study') || 'N';
 
     const [currentStep, setCurrentStep] = useState(1);
@@ -37,7 +39,6 @@ const PhoneticsMain = () => {
                 return;
             }
             try {
-                // CSS 동적 주입 (버전 관리를 통해 캐시 방지)
                 const v = new Date().getTime();
                 ["default.css", "content.css"].forEach(file => {
                     const linkId = `css-${file.replace('.', '-')}`;
@@ -61,7 +62,7 @@ const PhoneticsMain = () => {
                     setTaskData({
                         task_id: taskId,
                         user_id: userId,
-                        branch_code: branchCode || info.branch_code || '',
+                        branch_code: branchCode || info.branch_code || 'MAIN',
                         re_study: reStudy,
                         re_study_no: info.re_study_no || 0,
                         bookName: info.study_step2_name || "LUCID PHONETICS",
@@ -82,6 +83,24 @@ const PhoneticsMain = () => {
         fetchAllData();
     }, [taskId, userId, reStudy]);
 
+    // 🚀 [수정 포인트] 인트로에서 호출될 학습 시작 함수
+    const handleStartStudy = () => {
+        // A. 에이전트 호출 (다른 학습창과 규격 통일)
+        if (triggerAgent) {
+            triggerAgent({
+                task_id: taskId,
+                user_id: userId,
+                branch_code: branchCode,
+                re_study: reStudy,
+                task_type: 'phonics' // 파닉스임을 명시
+            });
+        }
+        
+        // B. 단계 변경 (Intro -> Practice)
+        setCurrentStep(2); 
+        console.log("🚀 파닉스 에이전트 호출 및 학습 시작");
+    };
+
     // 2. 최종 퀴즈 완료 후 처리
     const handleFinalQuizComplete = (results) => {
         const failList = results.filter(item => item.input_eng_pass === 'N');
@@ -89,18 +108,18 @@ const PhoneticsMain = () => {
 
         if (failCount > 0) {
             setReportData({ failCount, results });
-            setCurrentStep(7); // Retry 화면으로 이동
+            setCurrentStep(7); 
         } else {
             fetchFinalReport();
-            setCurrentStep(8); // 결과 리포트로 이동
+            setCurrentStep(8); 
         }
     };
 
-    // 3. 재학습 처리 (PHP 로직 반영)
+    // 3. 재학습 처리
     const handleRetryProcess = () => {
         const nextReStudy = reStudy === 'N' ? 'Y' : 'X';
         setReStudy(nextReStudy);
-        setCurrentStep(2); // Practice 단계로 회귀
+        setCurrentStep(2); 
     };
 
     const fetchFinalReport = async () => {
@@ -128,31 +147,28 @@ const PhoneticsMain = () => {
     if (loading || !taskData) return <div className="loading_box">Loading...</div>;
 
     return (
-        /* [중요] id="eduwrap"이 있어야 content.css의 기본 배경 이미지가 나타납니다. */
         <div id="eduwrap" style={{ touchAction: 'manipulation', minHeight: '100vh' }}>
             <div className="eduhead">
                 <div className="hd_info">
                     <p>교재명 : <span>{taskData.bookName} {taskData.subName}</span></p>
                     <p>학습명 : <span>{taskData.part !== "-" ? taskData.part : ""} Unit{taskData.unit}</span></p>
                 </div>
-                <ul class="hd_btn">
-			<li><a href="#">FLASHCARD</a></li>
-			<li><a href="#">PHONETICS PRACTICE</a></li>
-			<li><a href="#">QUIZ</a></li>
-		       </ul>
+                <ul className="hd_btn">
+                    <li className={currentStep === 2 ? "on" : ""}><a href="#">PRACTICE</a></li>
+                    <li className={currentStep === 4 ? "on" : ""}><a href="#">QUIZ</a></li>
+                    <li className={currentStep === 6 ? "on" : ""}><a href="#">FINAL</a></li>
+                </ul>
             </div>
 
-            {/* [배경 이미지 버그 수정 핵심]
-                background 속성 대신 backgroundColor를 사용하여 CSS의 이미지를 덮지 않도록 합니다. 
-            */}
             <div className="educontainer" style={{ 
                 minHeight: 'calc(100vh - 100px)', 
                 backgroundColor: currentStep === 1 ? "rgba(255,255,255,0.6)" : "transparent"
             }}>
+                {/* 🚀 handleStartStudy를 onStart 프롭으로 전달 */}
                 {currentStep === 1 && (
                     <PhoneticsIntro 
                         step1Name={taskData.bookName} 
-                        onStart={() => setCurrentStep(2)} 
+                        onStart={handleStartStudy} 
                     />
                 )}
                 
@@ -194,8 +210,6 @@ const PhoneticsMain = () => {
                     <PhoneticsResult reportData={reportData} onExit={handleExit} />
                 )}
             </div>
-     
-        
         </div>
     );
 };

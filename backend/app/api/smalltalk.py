@@ -138,48 +138,68 @@ async def analyze_smalltalk(
 @router.post("/complete")
 async def complete_smalltalk(payload: FinalCompleteRequest, db = Depends(get_db)):
     cursor = db.cursor(dictionary=True)
+    # 기본값 설정 (GPT 장애 대비)
     summary_text = "오늘 학습도 수고 많았어요! 루아이와 함께 꾸준히 연습해봐요."
     
     try:
-        # study_no 안전하게 가져오기
+        # 1. 학습 정보(study_no) 안전하게 가져오기
         sql_get_study = "SELECT study_no FROM splucid_task WHERE task_id = %s"
         cursor.execute(sql_get_study, (payload.task_id,))
         task_data = cursor.fetchone()
         
-        # task_data가 없는 경우 예외 처리
         if not task_data:
             print(f"⚠️ Task ID {payload.task_id} 를 찾을 수 없음")
             study_no = 0 
         else:
             study_no = task_data['study_no']
 
-        # 1. AI 요약 리포트 생성
+        # 2. ⭐ GPT 프롬프트 고도화 (팩트 기반 & 냉정한 분석)
         try:
-            # 로그에서 텍스트만 추출 ( student_transcript가 없을 경우 대비 )
-            log_texts = [f"Q{l.ai_no}: {l.student_transcript}" for l in payload.logs if l.student_transcript]
-            log_summary = "\n".join(log_texts)
+            # logs에서 질문 내용과 학생 답변을 매칭하여 프롬프트 구성
+            log_entries = []
+            for l in payload.logs:
+                # 리액트에서 보낸 question_text가 없으면 ai_no로 대체
+                q_txt = getattr(l, 'question_text', f"Question {l.ai_no}")
+                ans_txt = l.student_transcript if l.student_transcript else "응답 없음"
+                log_entries.append(f"- {q_txt} -> 학생 답변: {ans_txt}")
+            
+            log_summary = "\n".join(log_entries)
             
             if log_summary:
+                prompt = (
+                    f"당신은 엄격하면서도 다정한 영어 선생님 '루아이'입니다.\n"
+                    f"다음은 학생의 실제 스몰토크 답변 데이터입니다:\n{log_summary}\n\n"
+                    "--- 평가 지침 ---\n"
+                    "1. 학생이 답변을 하지 않았거나 질문과 전혀 상관없는 말을 했다면 반드시 지적하세요.\n"
+                    "2. 무의미한 칭찬은 지양하고, 문법이나 단어가 어색했다면 한국어로 교정 제안을 포함하세요.\n"
+                    "3. 전체 유창성을 0~100점 사이의 점수로 환산하여 첫 줄에 '점수: [점수]점' 형식으로 표시하세요.\n"
+                    "4. 총평은 3문장 내외로, 실제 답변 내용을 언급하며 구체적으로 작성하세요."
+                    "5. 특수문자 및 쌍따옴표등 기호는 아무것도 사용하지 말아요."
+                )
+
                 gpt_res = client.chat.completions.create(
                     model="gpt-4o-mini",
-                    messages=[{
-                        "role": "user", 
-                        "content": f"학생의 영어 대화 결과야:\n{log_summary}\n다정한 AI 선생님처럼 한국어 총평 3문장 작성해줘."
-                    }]
+                    messages=[
+                        {"role": "system", "content": "You are a factual English tutor. Focus on accuracy and provide objective feedback."},
+                        {"role": "user", "content": prompt}
+                    ]
                 )
                 summary_text = gpt_res.choices[0].message.content
         except Exception as gpt_err:
             print(f"⚠️ GPT API 호출 실패: {gpt_err}")
 
-        # 2. splucid_task 업데이트
+        # 3. splucid_task 상태 업데이트
         if payload.re_study == "R":
+            # 재학습인 경우 차수만 업데이트
             sql_task = "UPDATE splucid_task SET re_study_no = %s WHERE task_id = %s"
             cursor.execute(sql_task, (payload.re_study_no, payload.task_id))
         else:
+            # 일반 완료인 경우 상태 'Y' 및 종료일 기록
             sql_task = "UPDATE splucid_task SET task_status = 'Y', task_end_date = NOW() WHERE task_id = %s"
             cursor.execute(sql_task, (payload.task_id,))
 
-        # 3. 리포트 테이블 저장
+        # 4. 리포트 테이블 저장 (지점 코드 포함)
+        # payload.user_id와 summary_text(점수 포함)를 명확히 저장합니다.
         sql_report = """
             INSERT INTO splucid_ai_small_talk_report 
             (task_id, study_no, user_id, ai_summary_ko, reg_date) 
@@ -193,7 +213,7 @@ async def complete_smalltalk(payload: FinalCompleteRequest, db = Depends(get_db)
     except Exception as e:
         db.rollback()
         print(f"🔥 Final Save Error: {str(e)}") 
-        raise HTTPException(status_code=500, detail=f"저장 중 서버 에러 발생: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"저장 중 에러 발생: {str(e)}")
     finally:
         cursor.close()
 

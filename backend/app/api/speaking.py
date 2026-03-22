@@ -6,24 +6,21 @@ import shutil
 from typing import List, Optional
 from pathlib import Path
 import datetime
-from fastapi import APIRouter, Depends, HTTPException, Form, File, UploadFile, Body
+from fastapi import APIRouter, Depends, HTTPException, Form, File, UploadFile, Body, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import openai
 from dotenv import load_dotenv
-from app.database import get_db, get_db_connection
+from app.database import get_db
 
-# [1] 환경 설정 로드
+# [1] 환경 설정 및 OpenAI 초기화
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 load_dotenv(BASE_DIR / ".env")
-
-# [2] OpenAI 클라이언트 초기화
 client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
 
 router = APIRouter()
 
-# --- [데이터 검증 모델] ---
+# --- [데이터 모델] ---
 class SentenceResult(BaseModel):
     study_eng: str
     transcribed: str
@@ -47,123 +44,99 @@ class ReportSaveRequest(BaseModel):
     overall_feedback: str
     details: List[ReportDetail]
 
-# --- [업로드 경로 설정] ---
+# 업로드 경로
 UPLOAD_DIR = BASE_DIR / "uploads" / "speaking"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-# 1. [GET] 학습 정보 조회
+# 1. [GET] 학습 정보 조회 (테스트 성공한 Query 방식으로 유지)
 @router.get("/info")
-async def get_speaking_info(task_id: int, db = Depends(get_db)):
+async def get_speaking_info(task_id: int = Query(...), db = Depends(get_db)):
     cursor = db.cursor(dictionary=True)
     try:
+        print(f"🚩 [BACKEND] 요청 수신 task_id: {task_id}")
+
+        # [검증됨] 과제 정보 조회
         sql_task = "SELECT study_step2_name, study_step3_name, study_part, study_unit, study_no FROM splucid_task WHERE task_id = %s"
         cursor.execute(sql_task, (task_id,))
         dayTaskView = cursor.fetchone()
         
         if not dayTaskView:
-            raise HTTPException(status_code=404, detail="과제 정보를 찾을 수 없습니다.")
+            print(f"❌ [BACKEND] 데이터 없음 ID: {task_id}")
+            raise HTTPException(status_code=404, detail="DATA_NOT_FOUND")
 
+        # [추가] 문장 리스트 조회
+        s_no = str(dayTaskView['study_no']).strip()
         sql_sentences = "SELECT study_eng, study_mp3_file, study_item_no FROM splucid_study_sentence WHERE study_no = %s ORDER BY study_item_no ASC"
-        cursor.execute(sql_sentences, (dayTaskView['study_no'],))
+        cursor.execute(sql_sentences, (s_no,))
         studySentenceList = cursor.fetchall()
 
         return {
+            "status": "success",
             "dayTaskView": dayTaskView,
             "studySentenceList": studySentenceList
         }
     except Exception as e:
-        print(f"❌ [DB Error]: {str(e)}")
-        raise HTTPException(status_code=500, detail="데이터베이스 조회 실패")
+        print(f"🔥 [BACKEND ERROR]: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         cursor.close()
 
-# 2. [POST] AI 분석 (Whisper + GPT)
-@router.post("/ai-analysis")
-async def analyze_speaking_with_ai(
-    user_code: str = Form(...),
-    branch_code: str = Form(...),
-    target_text: str = Form(...),
-    audio_file: UploadFile = File(...),
-):
-    ext = audio_file.filename.split('.')[-1]
-    file_name = f"{branch_code}_{user_code}_{uuid.uuid4()}.{ext}"
-    save_path = UPLOAD_DIR / file_name
+# 2. [POST] 전체 통녹음 분석
+# 2. [POST] 전체 통녹음 분석 (422 에러 방지를 위해 입구는 str로 통일)
+# app/api/speaking.py 내의 해당 함수
 
-    with open(save_path, "wb") as buffer:
-        shutil.copyfileobj(audio_file.file, buffer)
-
-    try:
-        with open(save_path, "rb") as audio:
-            transcript = client.audio.transcriptions.create(
-                model="whisper-1", 
-                file=audio, 
-                language="en"
-            )
-        student_text = transcript.text
-
-        prompt = (
-            f"Compare Target: '{target_text}' and Student: '{student_text}'. "
-            f"Provide JSON: {{'score': 0-100, 'feedback': 'string'}}"
-        )
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a supportive English teacher."},
-                {"role": "user", "content": prompt}
-            ],
-            response_format={ "type": "json_object" }
-        )
-        
-        return {
-            "status": "success", 
-            "transcribed": student_text, 
-            "ai_feedback": json.loads(response.choices[0].message.content)
-        }
-    except Exception as e:
-        print(f"❌ [AI Error]: {str(e)}")
-        raise HTTPException(status_code=500, detail="AI 분석 오류")
-    
-# [NEW] 2-1. 전체 통녹음 분석 (Whisper + GPT Batch)
 @router.post("/ai-analysis-batch")
 async def analyze_speaking_batch(
     user_code: str = Form(...),
     task_id: str = Form(...),
     branch_code: str = Form(...),
-    target_sentences: str = Form(...),  # JSON 문자열: ["sentence1", "sentence2", ...]
+    target_sentences: str = Form(...), 
     audio_file: UploadFile = File(...),
-):
-    # [1] 파일명 규칙: 아이디_숙제번호_일시
+    ):
+    # [1] 업로드 폴더 생성
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+    # [2] 파일 저장
     now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     ext = audio_file.filename.split('.')[-1]
     file_name = f"{user_code}_{task_id}_{now_str}.{ext}"
     save_path = UPLOAD_DIR / file_name
 
-    # [2] 음성 파일 물리적 저장
     with open(save_path, "wb") as buffer:
         shutil.copyfileobj(audio_file.file, buffer)
 
     try:
-        # [3] Whisper로 전체 텍스트 추출
+        # [3] Whisper AI: 실제 들린 내용만 텍스트로 추출
         with open(save_path, "rb") as audio:
             transcript = client.audio.transcriptions.create(
                 model="whisper-1", file=audio, language="en"
             )
         full_transcribed_text = transcript.text
+        
+        # [4] 정답 문장 리스트 파싱
         target_list = json.loads(target_sentences)
 
-        # [4] GPT-4o-mini를 이용한 문장별 매칭 및 채점
+        # [5] ⭐ GPT 프롬프트 (환각 방지 및 정밀 매칭 강화)
+        # 학생이 3문장만 말했으면 나머지 7문장은 비워두도록 강제함
         prompt = (
-            f"Student's full speech: '{full_transcribed_text}'\n"
-            f"Target sentences to match: {target_list}\n"
-            "Compare the speech with target sentences. For each target sentence, "
-            "provide: 1) original text, 2) matched student's text, 3) accuracy score(0-100), 4) short feedback.\n"
-            "Return JSON format: {'results': [{'study_eng':'', 'transcribed':'', 'score':0, 'feedback':''}, ...]}"
+            f"### Role: Professional English Speech Evaluator\n"
+            f"### Student's Actual Speech: '{full_transcribed_text}'\n"
+            f"### Target Sentences (to follow): {target_list}\n\n"
+            "--- Instructions ---\n"
+            "1. Compare the 'Student's Actual Speech' with the 'Target Sentences' list in order.\n"
+            "2. Identify which target sentences were actually spoken by the student.\n"
+            "3. IMPORTANT: If a target sentence is NOT present in the student's actual speech, "
+            "set 'transcribed' as an empty string (\"\") and 'score' to 0.\n"
+            "4. DO NOT repeat the target sentence into 'transcribed' if the student didn't say it.\n"
+            "5. Provide a JSON object: {'results': [{'study_eng':'', 'transcribed':'', 'score':0, 'feedback':''}]}"
         )
         
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{"role": "system", "content": "You are a professional English speech rater."},
-                      {"role": "user", "content": prompt}],
+            messages=[
+                {"role": "system", "content": "You are a strict evaluator. Only record what you actually hear in the student's speech."},
+                {"role": "user", "content": prompt}
+            ],
             response_format={ "type": "json_object" }
         )
         
@@ -171,21 +144,58 @@ async def analyze_speaking_batch(
 
         return {
             "status": "success",
-            "file_name": file_name, # 저장된 파일명 반환
             "full_text": full_transcribed_text,
-            "analysis": analysis_data['results']
+            "analysis": analysis_data.get('results', [])
         }
+
     except Exception as e:
-        print(f"❌ [Batch Error]: {str(e)}")
-        raise HTTPException(status_code=500, detail="Batch 분석 중 오류가 발생했습니다.")
+        print(f"❌ [AI 분석 에러]: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"분석 중 오류: {str(e)}")
     
 
-# 3. [POST] 최종 리포트 및 결과 저장 (하드코딩 제거 버전)
+# 3. [POST] 최종 총평 생성 (팩트 체크 강화 버전)
+@router.post("/final-summary")
+async def generate_final_summary(payload: SummaryRequest):
+    try:
+        # [1] 실제로 학생이 발화한 문장만 필터링 (환각 방지 핵심)
+        spoken_results = [r for r in payload.results if r.transcribed.strip() != ""]
+        
+        if not spoken_results:
+            return {"summary": "녹음된 문장이 없습니다. 마이크를 켜고 다시 도전해 보세요!"}
+        
+        # [2] 분석용 데이터 구성
+        summary_data = "\n".join([f"원문: {r.study_eng} / 학생: {r.transcribed}" for r in spoken_results])
+        count = len(spoken_results)
+
+        # [3] GPT 프롬프트 수정
+        prompt = (
+            f"학생이 전체 문장 중 총 {count}문장을 학습했습니다.\n"
+            f"학습 데이터:\n{summary_data}\n\n"
+            "--- 지침 ---\n"
+            "1. 위 '학습 데이터'에 있는 내용만 바탕으로 한국어 피드백을 작성해줘.\n"
+            "2. 말하지 않은 문장에 대해서는 절대 언급하지 마.\n"
+            "3. 구체적으로 잘한 단어나 발음이 있다면 칭찬하고, 개선점을 3문장 이내로 격려 섞어 작성해줘."
+            "4. 특수문자나 이모지등 문자외의 특수문자는 쓰지말아줘."
+            "5. 쌍따옴표나 어떤기호도 쓰지말아줘 읽는게 어색해지니깐"
+        )
+        
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a factual and encouraging English tutor."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        return {"summary": response.choices[0].message.content}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+# 4. [POST] 리포트 저장
 @router.post("/save-report")
 async def save_final_report(payload: ReportSaveRequest, db = Depends(get_db)):
     cursor = db.cursor()
     try:
-        # [A] 메인 리포트 저장 (splucid_speaking_report)
         sql_report = """
             INSERT INTO splucid_speaking_report 
             (task_id, user_id, branch_code, accuracy_grade, total_score, total_words, wpm, duration, overall_feedback)
@@ -197,65 +207,27 @@ async def save_final_report(payload: ReportSaveRequest, db = Depends(get_db)):
             payload.wpm, payload.duration, payload.overall_feedback
         ))
 
-        # [B] 문장별 상세 내역 저장 (splucid_speaking_detail)
-        sql_detail = """
-            INSERT INTO splucid_speaking_detail (task_id, study_eng, transcribed_text)
-            VALUES (%s, %s, %s)
-        """
+        sql_detail = "INSERT INTO splucid_speaking_detail (task_id, study_eng, transcribed_text) VALUES (%s, %s, %s)"
         detail_data = [(payload.task_id, d.study_eng, d.transcribed) for d in payload.details]
         cursor.executemany(sql_detail, detail_data)
 
-        # [C] 기본 과제 테이블 상태 업데이트
-        sql_task_update = "UPDATE splucid_task SET task_status = 'Y', task_end_date = NOW() WHERE task_id = %s"
-        cursor.execute(sql_task_update, (payload.task_id,))
+        cursor.execute("UPDATE splucid_task SET task_status = 'Y', task_end_date = NOW() WHERE task_id = %s", (payload.task_id,))
 
         db.commit()
-        return {"result_code": "200", "result_msg": "리포트가 성공적으로 저장되었습니다."}
+        return {"result_code": "200", "result_msg": "저장 성공"}
     except Exception as e:
         db.rollback()
-        print(f"❌ [Save Error]: {str(e)}")
-        raise HTTPException(status_code=500, detail="리포트 저장 실패")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         cursor.close()
 
-# 4. [POST] 최종 총평 (GPT)
-@router.post("/final-summary")
-async def generate_final_summary(payload: SummaryRequest):
-    try:
-        summary_data = "\n".join([f"Target: {i.study_eng}, Student: {i.transcribed}" for i in payload.results])
-        prompt = (
-            f"다음은 학생의 스피킹 결과입니다:\n{summary_data}\n\n"
-            "너는 루시드 학원의 다정한 AI 선생님이야. 한국어로 성과를 칭찬하고 구체적인 팁을 포함해 3문장 이내로 요약해줘."
-        )
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return {"summary": response.choices[0].message.content}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail="총평 생성 실패")
-
-# 5. [POST] TTS
+# 5. [POST] TTS (오타 수정 완료)
 @router.post("/tts")
 async def text_to_speech(payload: dict = Body(...)):
     try:
         response = client.audio.speech.create(
-            model="tts-1",
-            voice="shimmer", 
-            input=payload.get("text")
+            model="tts-1", voice="shimmer", input=payload.get("text", "")
         )
         return StreamingResponse(io.BytesIO(response.content), media_type="audio/mpeg")
     except Exception as e:
-        raise HTTPException(status_code=500, detail="TTS 생성 실패")
-
-# 6. [GET] 스키마 조회 전용 (관리용)
-@router.get("/schema/{table_name}")
-async def get_table_schema(table_name: str, db = Depends(get_db)):
-    cursor = db.cursor(dictionary=True)
-    try:
-        cursor.execute(f"DESCRIBE {table_name}")
-        return {"table": table_name, "columns": cursor.fetchall()}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail="존재하지 않는 테이블")
-    finally:
-        cursor.close()
+        raise HTTPException(status_code=500, detail="TTS 실패")
