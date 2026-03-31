@@ -100,29 +100,44 @@ const VocaMain = () => {
         init();
     }, [taskId, userId, reStudy]);
 
-    const handleQuizComplete = async (finalWords) => {
-        setLoading(true);
-        try {
-            const res = await axios.post(`/api/voca/save-results`, {
-                task_id: Number(taskId),
-                user_id: userId,
-                re_study: reStudy,
-                re_study_no: taskInfo?.re_study_no || 0,
-                inputArray: finalWords 
-            });
+    // VocaMain.jsx 내의 handleQuizComplete 함수 수정
 
-            if (res.data.result_code === "200") {
-                setReportData(res.data.report);
-                setMode('TOTAL_FINISH');
-            } else {
-                alert("저장 실패: " + res.data.message);
-            }
-        } catch (err) {
-            alert("서버 연결에 실패했습니다.");
-        } finally {
-            setLoading(false); 
+const handleQuizComplete = async (finalWords) => {
+    setLoading(true);
+    try {
+        // [수정] 백엔드 SaveResultRequest 모델에 맞게 데이터 구조화
+        const payload = {
+            task_id: Number(taskId),
+            user_id: userId,
+            branch_code: branchCode, // 지점 코드 누락 방지
+            re_study: reStudy,
+            re_study_no: Number(taskInfo?.re_study_no || 0),
+            inputArray: finalWords.map(w => ({
+                study_no: w.study_no,
+                study_item_no: w.study_item_no,
+                study_eng: w.study_eng,
+                study_kor: w.study_kor,
+                input_eng_pass: w.input_eng_pass || 'N',
+                input_kor_pass: w.input_kor_pass || 'N'
+            }))
+        };
+
+        const res = await axios.post(`/api/voca/save-results`, payload);
+
+        if (res.data.result_code === "200") {
+            setReportData(res.data.report);
+            setMode('TOTAL_FINISH');
+
+        } else {
+            alert("저장 실패: " + res.data.message);
         }
-    };
+    } catch (err) {
+        console.error("Save Error:", err);
+        alert("학습 결과를 저장하는 중 오류가 발생했습니다.");
+    } finally {
+        setLoading(false); 
+    }
+  };
     
     if (loading && mode === 'START') return <div className="loading_box">학습 로드 중...</div>;
     if (!taskInfo) return null;

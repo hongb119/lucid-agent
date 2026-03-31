@@ -192,31 +192,97 @@ async def generate_final_summary(payload: SummaryRequest):
     
 
 # 4. [POST] 리포트 저장
+# 4. [POST] 리포트 저장 (별점 연동 버전)
 @router.post("/save-report")
 async def save_final_report(payload: ReportSaveRequest, db = Depends(get_db)):
-    cursor = db.cursor()
+    cursor = db.cursor(dictionary=True) # dictionary=True 추가로 데이터 접근 용이하게 설정
+    
     try:
+        # [단계 0] 해당 Task의 기본 정보(유저ID, 숙제날짜) 조회
+        sql_info = "SELECT user_id, task_day FROM splucid_task WHERE task_id = %s"
+        cursor.execute(sql_info, (payload.task_id,))
+        task_info = cursor.fetchone()
+        
+        if not task_info:
+            raise HTTPException(status_code=404, detail="TASK_NOT_FOUND")
+
+        user_id = task_info['user_id']
+        task_day = task_info['task_day']
+        now_full = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        # 1. 스피킹 메인 리포트 저장
         sql_report = """
             INSERT INTO splucid_speaking_report 
-            (task_id, user_id, branch_code, accuracy_grade, total_score, total_words, wpm, duration, overall_feedback)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (task_id, user_id, branch_code, accuracy_grade, total_score, total_words, wpm, duration, overall_feedback, reg_date)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         cursor.execute(sql_report, (
-            payload.task_id, payload.user_id, payload.branch_code,
+            payload.task_id, user_id, payload.branch_code,
             payload.accuracy, payload.score, payload.word_count,
-            payload.wpm, payload.duration, payload.overall_feedback
+            payload.wpm, payload.duration, payload.overall_feedback, now_full
         ))
 
+        # 2. 문장별 상세 결과 저장
         sql_detail = "INSERT INTO splucid_speaking_detail (task_id, study_eng, transcribed_text) VALUES (%s, %s, %s)"
         detail_data = [(payload.task_id, d.study_eng, d.transcribed) for d in payload.details]
         cursor.executemany(sql_detail, detail_data)
 
-        cursor.execute("UPDATE splucid_task SET task_status = 'Y', task_end_date = NOW() WHERE task_id = %s", (payload.task_id,))
+        # 3. 과제 마스터 테이블(splucid_task) 업데이트 -> [핵심] 리스트 연동
+        # 스피킹 점수(score)를 study_pass_tcnt 등에 활용할 수 있도록 업데이트
+        sql_task_update = """
+            UPDATE splucid_task 
+            SET task_status = 'Y', 
+                task_end_date = %s,
+                speaking_accuracy = %s,
+                speaking_wpm = %s
+            WHERE task_id = %s AND user_id = %s
+        """
+        cursor.execute(sql_task_update, (now_full, payload.accuracy, payload.wpm, payload.task_id, user_id))
+
+        # 4. PHP 별점(Star Point) 자동 계산 로직 이식 -> [핵심] 달력 별 연동
+        # 4-1. 해당 날짜(task_day)의 유저 숙제 전체 리스트 재조회
+        sql_all_day_tasks = """
+            SELECT task_status, task_day, DATE(task_end_date) as end_date, re_study_no 
+            FROM splucid_task 
+            WHERE user_id = %s AND task_day = %s
+        """
+        cursor.execute(sql_all_day_tasks, (user_id, task_day))
+        all_day_tasks = cursor.fetchall()
+        
+        total_day_cnt = len(all_day_tasks)
+        today_complete_cnt = 0
+        
+        for t in all_day_tasks:
+            if t['task_status'] == 'Y':
+                # PHP 로직: 숙제날짜와 실제완료날짜가 같으면 '기간내 완료'
+                if str(t['task_day']) == str(t['end_date']):
+                    today_complete_cnt += 1
+
+        # 4-2. 별점 점수 산정
+        star_cnt = 0
+        memo = ""
+        if total_day_cnt > 0:
+            if total_day_cnt == today_complete_cnt:
+                star_cnt = 3
+                memo = "모든 숙제 기간내 완료"
+            elif today_complete_cnt > 0 or (total_day_cnt == len([x for x in all_day_tasks if x['task_status'] == 'Y'])):
+                star_cnt = 2
+                memo = "모든 숙제 완료"
+            else:
+                star_cnt = 1
+                memo = "일부 숙제 완료"
+
+            # 4-3. 별점 테이블 갱신 (기존 삭제 후 삽입)
+            cursor.execute("DELETE FROM splucid_star_point WHERE user_id = %s AND study_day = %s", (user_id, task_day))
+            sql_star_ins = "INSERT INTO splucid_star_point (user_id, study_day, star_cnt, memo) VALUES (%s, %s, %s, %s)"
+            cursor.execute(sql_star_ins, (user_id, task_day, star_cnt, memo))
 
         db.commit()
-        return {"result_code": "200", "result_msg": "저장 성공"}
+        return {"result_code": "200", "result_msg": "스피킹 리포트 및 별점 저장 성공"}
+
     except Exception as e:
         db.rollback()
+        print(f"🔥 [SAVE ERROR]: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         cursor.close()

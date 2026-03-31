@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 
-const PatternDrill_Drills = ({ contents, onComplete }) => {
+const PatternDrill_Drills = ({ contents, onComplete, task_id, user_id, branch_code }) => {
     if (!contents || contents.length === 0) return null;
 
     const [itemNo, setItemNo] = useState(0);
-    const [playStatus, setPlayStatus] = useState("READY"); // READY(클릭대기) -> START(재생) -> SPEAKING(녹음)
+    const [playStatus, setPlayStatus] = useState("READY"); 
     const [isRecording, setIsRecording] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [currentLogs, setCurrentLogs] = useState([]);
@@ -14,46 +14,41 @@ const PatternDrill_Drills = ({ contents, onComplete }) => {
     const mediaRecorderRef = useRef(null);
     const streamRef = useRef(null);
     const audioChunks = useRef([]);
+    const recordingTimerRef = useRef(null); // [디버깅] 20초 타이머용 Ref 추가
     const currentItem = contents[itemNo];
 
-    // [버그 해결 1] 첫 진입 시 브라우저 차단을 막기 위한 초기화
     useEffect(() => {
-        // 사용자가 화면을 보게 되면 '재생 준비' 상태로 시작
         setPlayStatus("READY"); 
+        // 언마운트 시 타이머 정리
+        return () => {
+            if (recordingTimerRef.current) clearTimeout(recordingTimerRef.current);
+        };
     }, []);
 
-    // [버그 해결 2] 음성 재생 함수 (에러 핸들링 및 재시도 로직 추가)
     const playAudio = async () => {
         if (!currentItem) return;
-        
+        if (recordingTimerRef.current) clearTimeout(recordingTimerRef.current); // 타이머 초기화
+
         try {
             audioRef.current.pause();
             audioRef.current.src = `https://admin.lucideducation.co.kr/uploadDir/study/mp3/${currentItem.study_mp3_file}`;
             audioRef.current.playbackRate = 0.9;
-
-            setPlayStatus("START"); // 재생 중 상태로 변경
+            setPlayStatus("START");
 
             audioRef.current.onended = () => {
                 setPlayStatus("SPEAKING");
-                handleStartRecording(); // 음성 끝나면 자동 녹음 시작
+                handleStartRecording(); 
             };
-
-            // play()는 Promise를 반환하므로 await로 처리하여 차단 여부 확인
             await audioRef.current.play();
         } catch (err) {
-            console.warn("Autoplay 차단됨. 사용자 클릭 대기:", err);
-            setPlayStatus("READY"); // 재생 실패 시 다시 버튼 노출
+            setPlayStatus("READY");
         }
     };
 
-    // [로직] 문장이 바뀔 때마다 실행 (첫 문장은 READY 상태에서 대기)
     useEffect(() => {
-        if (itemNo > 0) {
-            playAudio(); // 두 번째 문장부터는 이미 사용자 클릭이 있었으므로 자동 재생 가능
-        }
+        if (itemNo > 0) playAudio();
     }, [itemNo]);
 
-    // 마이크 시작 로직 (기존과 동일)
     const handleStartRecording = async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -63,6 +58,11 @@ const PatternDrill_Drills = ({ contents, onComplete }) => {
 
             mediaRecorderRef.current.ondataavailable = (e) => audioChunks.current.push(e.data);
             mediaRecorderRef.current.onstop = () => {
+                // [디버깅] 녹음 중지 시 타이머 해제
+                if (recordingTimerRef.current) {
+                    clearTimeout(recordingTimerRef.current);
+                    recordingTimerRef.current = null;
+                }
                 if (streamRef.current) {
                     streamRef.current.getTracks().forEach(track => track.stop());
                 }
@@ -71,6 +71,15 @@ const PatternDrill_Drills = ({ contents, onComplete }) => {
 
             mediaRecorderRef.current.start();
             setIsRecording(true);
+
+            // 🚀 [디버깅 추가] 20초 자동 타임아웃 로직
+            recordingTimerRef.current = setTimeout(() => {
+                if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+                    console.warn("🚩 20초 시간 초과로 자동 녹음 종료");
+                    mediaRecorderRef.current.stop();
+                }
+            }, 20000); // 20초 (20000ms)
+
         } catch (err) {
             alert("마이크 권한을 확인해주세요.");
             setPlayStatus("READY");
@@ -78,36 +87,69 @@ const PatternDrill_Drills = ({ contents, onComplete }) => {
     };
 
     const handleAnalyze = async () => {
-        setPlayStatus("PROCESSING");
-        const audioBlob = new Blob(audioChunks.current, { type: 'audio/wav' });
-        const formData = new FormData();
-        formData.append('audio_file', audioBlob);
-        formData.append('target_text', currentItem.study_eng);
+    // 1. 상태를 분석 중으로 변경
+    setPlayStatus("PROCESSING");
 
-        try {
-            const res = await axios.post('/api/patterndrill/analyze-speaking', formData);
+    // 2. 녹음된 오디오 청크들을 하나의 Blob으로 합침
+    // 타입은 백엔드 Whisper가 인식하기 좋은 audio/wav 또는 audio/webm 사용
+    const audioBlob = new Blob(audioChunks.current, { type: 'audio/wav' });
+
+    // 3. FormData 객체 생성 (파일과 일반 필드를 함께 보내기 위함)
+    const formData = new FormData();
+    
+    /**
+     * [핵심] 백엔드 FastAPI의 파라미터명과 정확히 일치시켜야 422 에러가 나지 않습니다.
+     * 필드명: audio_file, task_id, study_item_no, user_id, branch_code
+     */
+    formData.append('audio_file', audioBlob, 'student_recording.wav'); // 파일 (파일명 지정 권장)
+    formData.append('task_id', task_id);                             // 부모로부터 받은 taskId
+    formData.append('study_item_no', currentItem.study_item_no);      // 현재 문장 번호
+    formData.append('user_id', user_id);                             // 프로젝트 규칙: 유저ID 필수
+    formData.append('branch_code', branch_code);                     // 프로젝트 규칙: 지점코드 필수
+
+    try {
+        // 4. API 호출 (헤더는 axios가 FormData를 감지하여 multipart/form-data로 자동 설정함)
+        const res = await axios.post('/api/patterndrill/analyze-speaking', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+        });
+
+        if (res.data.result_code === "200") {
+            // 5. 분석 결과 로그 생성
             const newLog = {
                 study_item_no: currentItem.study_item_no,
-                student_transcript: res.data.transcribed,
-                is_speaking_correct: res.data.is_correct,
+                question_text: currentItem.study_eng,
+                student_transcript: res.data.transcript, // 백엔드에서 준 transcript 텍스트
+                is_speaking_correct: true,               // 필요 시 res.data.is_correct 판정값 사용
                 unscramble_input: "",
                 is_unscramble_correct: false
             };
+
             const updatedLogs = [...currentLogs, newLog];
             setCurrentLogs(updatedLogs);
 
+            // 6. 다음 문장으로 이동하거나 학습 종료 처리
             if (itemNo + 1 < contents.length) {
                 setItemNo(prev => prev + 1);
-                setPlayStatus("START"); // 다음 문장은 자동 재생 시도
             } else {
+                // 부모 컴포넌트의 handleDrillComplete 호출
                 onComplete(updatedLogs);
             }
-        } catch (err) {
+        } else {
+            console.error("서버 응답 오류:", res.data);
+            alert("분석 실패: " + (res.data.error || "알 수 없는 오류"));
             setPlayStatus("READY");
-        } finally {
-            setIsRecording(false);
         }
-    };
+
+    } catch (err) {
+        // 422 에러 발생 시 상세 원인을 콘솔에 출력 (디버깅용)
+        console.error("❌ API 호출 에러 상세:", err.response?.data);
+        alert("분석 중 통신 오류가 발생했습니다.");
+        setPlayStatus("READY");
+    } finally {
+        // 7. 녹음 상태 해제
+        setIsRecording(false);
+    }
+  };
 
     return (
         <div id="agent-content" className="educontainer">
@@ -118,7 +160,7 @@ const PatternDrill_Drills = ({ contents, onComplete }) => {
                         <span className="tx_box">
                             {playStatus === "READY" && "하단의 마이크 버튼을 눌러 큰소리로 말해보세요."}
                             {playStatus === "START" && "루아이가 들려주는 음성을 잘 들어보세요."}
-                            {playStatus === "SPEAKING" && "문장을 따라 읽어주세요."}
+                            {playStatus === "SPEAKING" && (isRecording ? "문장을 따라 읽어주세요. (20초 이내)" : "준비되셨나요?")}
                             {playStatus === "PROCESSING" && "AI 분석 중입니다 잠시만 기다리세요..."}
                         </span>
                     </p>
@@ -135,7 +177,6 @@ const PatternDrill_Drills = ({ contents, onComplete }) => {
             </div>
 
             <div className="btns m_txcenter">
-                {/* [해결] READY 상태일 때 재생 버튼을 명시적으로 노출하여 브라우저 차단 해제 */}
                 {playStatus === "READY" && (
                     <button type="button" className="ch_btn" onClick={playAudio}>
                         <img src="/static/study/images/btn_s01.png" alt="start" />
@@ -154,11 +195,11 @@ const PatternDrill_Drills = ({ contents, onComplete }) => {
                         type="button" 
                         className={`ch_btn ${isRecording ? 'ani_btn' : ''}`} 
                         onClick={() => isRecording && mediaRecorderRef.current.stop()}
+                        disabled={playStatus === "PROCESSING"}
                     >
                         <img src={isRecording ? "/static/study/images/btn_s09.png" : "/static/study/images/btn_s01.png"} alt="mic" />
                     </button>
                 )}
-                {isProcessing && <div className="spinner"></div>}
             </div>
         </div>
     );

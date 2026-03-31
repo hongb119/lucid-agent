@@ -159,12 +159,7 @@ const DictaQuiz = ({ words, onLog, onComplete }) => {
                 </div>
             </div>
             
-            {/* 오답일 때만 수동으로 다음으로 넘어가게 할 경우 버튼 노출 (선택사항) */}
-            {isAnswered && (
-                <div className="btn_wrap mt20" style={{ textAlign: 'right' }}>
-                    <button className="next_btn" onClick={() => handleNext()}>Next →</button>
-                </div>
-            )}
+            
         </div>
     );
 };

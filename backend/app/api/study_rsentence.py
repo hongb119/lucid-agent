@@ -52,21 +52,31 @@ async def fetch_rsentence(task_id: int):
         if connection: connection.close()
 
 # 2. 결과 저장 (보여주신 log_id, created_at 구조 반영)
+# 2. 결과 저장 (별점 연동 및 PHP 호환 버전)
 @router.post("/save")
 async def save_rsentence(req: SaveRSentenceRequest):
-    print(f"--- 📊 RSentence 저장 시작: {req.user_id} ---")
+    print(f"--- 📊 RSentence 저장 및 별점 처리 시작: {req.user_id} ---")
     connection = None
     try:
         connection = get_db_connection()
         cursor = connection.cursor(dictionary=True)
 
-        # [A] 기존 로그 삭제 (현재 테이블명 확인 완료)
+        # [단계 0] 해당 Task의 숙제 날짜(task_day) 조회
+        cursor.execute("SELECT task_day FROM splucid_task WHERE task_id = %s", (req.task_id,))
+        task_info = cursor.fetchone()
+        if not task_info:
+            return {"status": "fail", "message": "Task not found"}
+        
+        task_day = task_info['task_day']
+        now_full = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        # [A] 기존 로그 삭제
         cursor.execute("""
             DELETE FROM splucid_study_rsentence_log 
             WHERE task_id = %s AND user_id = %s
         """, (req.task_id, req.user_id))
 
-        # [B] 상세 로그 저장 (created_at은 DB DEFAULT 처리되므로 제외)
+        # [B] 상세 로그 저장
         sql_log = """
             INSERT INTO splucid_study_rsentence_log 
             (task_id, user_id, study_item_no, try_count, taken_time, is_hint_used, input_text, is_correct)
@@ -85,7 +95,7 @@ async def save_rsentence(req: SaveRSentenceRequest):
         if log_data:
             cursor.executemany(sql_log, log_data)
 
-        # [C] 요약 리포트 저장 (report_id 자리에 자동생성되도록 컬럼 명시)
+        # [C] 요약 리포트 저장
         total_items = len(req.tracking_logs)
         ai_comment = "모든 문장을 맞췄어요! 진짜 영어 천재인가 봐요! 🧠✨" if correct_count == total_items else "정말 고생 많았어요! 틀린 문장은 다시 한번 복습해봐요! 💪"
         
@@ -101,17 +111,57 @@ async def save_rsentence(req: SaveRSentenceRequest):
         """
         cursor.execute(sql_report, (req.task_id, req.user_id, total_items, correct_count, req.total_time, ai_comment))
 
-        # [D] Task 상태 업데이트
+        # [D] Task 마스터 상태 업데이트 (리스트 날짜 연동)
         cursor.execute("""
             UPDATE splucid_task 
-            SET task_status = 'Y', task_end_date = NOW(), re_study_no = %s,
-                study_total_cnt = %s, study_pass_tcnt = %s
+            SET task_status = 'Y', 
+                task_end_date = %s, 
+                re_study_no = %s,
+                study_total_cnt = %s, 
+                study_pass_tcnt = %s
             WHERE task_id = %s AND user_id = %s
-        """, (req.re_study_no, total_items, correct_count, req.task_id, req.user_id))
+        """, (now_full, req.re_study_no, total_items, correct_count, req.task_id, req.user_id))
+
+        # [E] PHP 별점(Star Point) 자동 계산 로직 (SetStarPointSave 이식)
+        # E-1. 당일 유저 숙제 전체 현황 조회
+        sql_all_tasks = """
+            SELECT task_status, task_day, DATE(task_end_date) as end_date, re_study_no 
+            FROM splucid_task 
+            WHERE user_id = %s AND task_day = %s
+        """
+        cursor.execute(sql_all_tasks, (req.user_id, task_day))
+        all_day_tasks = cursor.fetchall()
+        
+        total_day_cnt = len(all_day_tasks)
+        today_complete_cnt = 0
+        
+        for t in all_day_tasks:
+            if t['task_status'] == 'Y':
+                if str(t['task_day']) == str(t['end_date']):
+                    today_complete_cnt += 1
+
+        # E-2. 별점 점수 산정
+        star_cnt = 0
+        memo = ""
+        if total_day_cnt > 0:
+            if total_day_cnt == today_complete_cnt:
+                star_cnt = 3
+                memo = "모든 숙제 기간내 완료"
+            elif today_complete_cnt > 0 or (total_day_cnt == len([x for x in all_day_tasks if x['task_status'] == 'Y'])):
+                star_cnt = 2
+                memo = "모든 숙제 완료"
+            else:
+                star_cnt = 1
+                memo = "일부 숙제 완료"
+
+            # E-3. 별점 테이블 갱신 (DELETE 후 INSERT)
+            cursor.execute("DELETE FROM splucid_star_point WHERE user_id = %s AND study_day = %s", (req.user_id, task_day))
+            sql_star_ins = "INSERT INTO splucid_star_point (user_id, study_day, star_cnt, memo) VALUES (%s, %s, %s, %s)"
+            cursor.execute(sql_star_ins, (req.user_id, task_day, star_cnt, memo))
 
         connection.commit()
 
-        # [E] 결과 화면용 상세 Join 데이터 조회
+        # [F] 결과 화면용 상세 Join 데이터 조회 (기존 로직 유지)
         sql_final = """
             SELECT 
                 L.study_item_no, L.try_count, L.taken_time, L.input_text, L.is_correct,

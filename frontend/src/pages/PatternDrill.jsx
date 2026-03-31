@@ -1,9 +1,11 @@
-import React, { useState, useEffect, useContext, useRef } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import axios from 'axios';
 import PatternDrill_Intro from './PatternDrill_Intro'; 
 import PatternDrill_FlashCard from './PatternDrill_FlashCard';
 import PatternDrill_Drills from './PatternDrill_Drills';
 import PatternDrill_Unscramble from './PatternDrill_Unscramble';
+import PatternDrill_SpeakingReport from './PatternDrill_SpeakingReport';
+import PatternDrill_FinalResult from './PatternDrill_FinalResult';
 import { AgentContext } from '../App'; 
 
 const PatternDrill = () => {
@@ -18,20 +20,21 @@ const PatternDrill = () => {
     const reStudy = queryParams.get('re_study') || 'N';
     const reStudyNo = parseInt(queryParams.get('re_study_no') || '0');
 
-    // [3] 상태 관리 (기능 누락 없음)
+    // [3] 상태 관리
     const [mode, setMode] = useState('START'); 
+    //const [mode, setMode] = useState('UNSCRAMBLE'); 
     const [contents, setContents] = useState([]);
+    const [originalContents, setOriginalContents] = useState([]); 
     const [taskInfo, setTaskInfo] = useState(null);
     const [logs, setLogs] = useState([]); 
     const [aiSummary, setAiSummary] = useState("");
     const [drillStats, setDrillStats] = useState({ correct: 0, wrong: 0 });
-    const [unscrambleStats, setUnscrambleStats] = useState({ correct: 0, wrong: 0 });
+    const [saveResponse, setSaveResponse] = useState(null); 
 
     // [4] 초기 데이터 및 CSS 로드
     useEffect(() => {
         const init = async () => {
             try {
-                // 표준 CSS 파일 로드
                 const cssFiles = ["default.css", "content.css", "lucid_study_standard.css"];
                 cssFiles.forEach(file => {
                     const linkId = `css-${file.replace('.', '-')}`;
@@ -44,10 +47,10 @@ const PatternDrill = () => {
                     }
                 });
 
-                // 학습 데이터 로드
                 const res = await axios.get(`/api/patterndrill/info`, { params: { task_id: taskId } });
-                if (res.data) {
-                    setContents(res.data.content_list || []);
+                if (res.data && res.data.content_list) {
+                    setContents(res.data.content_list);
+                    setOriginalContents(res.data.content_list);
                     setTaskInfo(res.data.task_info);
                 }
             } catch (err) { 
@@ -57,58 +60,92 @@ const PatternDrill = () => {
         init();
     }, [taskId]);
 
-    // [5] 학습 시작 핸들러 (에이전트 인사 + 모드 변경)
+    // [5] 학습 시작 핸들러
     const handleStartPatternDrill = () => {
         if (triggerAgent) {
             triggerAgent({
-                task_id: taskId,
-                user_id: userId,
-                branch_code: branchCode,
-                re_study: reStudy,
-                task_type: 'patterndrill'
+                task_id: taskId, user_id: userId, branch_code: branchCode,
+                re_study: reStudy, task_type: 'patterndrill'
             });
         }
         setMode('FLASHCARD'); 
     };
 
-    // [6] 패턴드릴(스피킹) 완료 시 리포트로 이동
+    // [6] 패턴드릴(스피킹) 완료 핸들러
     const handleDrillComplete = (speakingLogs) => {
-        const correct = speakingLogs.filter(l => l.is_speaking_correct).length;
-        setDrillStats({ correct, wrong: speakingLogs.length - correct });
-        setLogs(speakingLogs);
-        setMode('REPORT'); 
+        if (speakingLogs && speakingLogs.length > 0) {
+            const correct = speakingLogs.filter(l => l.is_speaking_correct).length;
+            setDrillStats({ correct, wrong: speakingLogs.length - correct });
+            setLogs([...speakingLogs]); 
+            setMode('REPORT'); 
+        }
     };
 
-    // [7] 최종 저장 및 결과창 이동 (언스크램블 데이터 병합)
-    const handleFinalSave = async (unscrambleLogs, uStats) => {
-        setUnscrambleStats(uStats);
-        const finalLogs = logs.map((sLog, idx) => ({
-            ...sLog,
-            unscramble_input: unscrambleLogs[idx]?.unscramble_input || "",
-            is_unscramble_correct: unscrambleLogs[idx]?.is_unscramble_correct || false
-        }));
+    // [7] 최종 저장 및 결과창 이동 (중복 제거 및 괄호 교정 완료)
+    const handleFinalSave = async (unscrambleLogs) => {
+        // 백엔드 모델과 일치하도록 데이터 정제
+        const finalLogs = originalContents.map((content) => {
+            const sLog = logs.find(l => l.study_item_no === content.study_item_no);
+            const uLog = unscrambleLogs.find(u => u.study_item_no === content.study_item_no);
+
+            return {
+                study_item_no: parseInt(content.study_item_no),
+                student_transcript: String(sLog?.student_transcript || ""),
+                is_speaking_correct: Boolean(sLog?.is_speaking_correct),
+                unscramble_input: String(uLog?.unscramble_input || ""),
+                is_unscramble_correct: Boolean(uLog?.is_unscramble_correct)
+            };
+        });
+
+        console.log("🚀 최종 전송 데이터:", finalLogs);
 
         try {
             const res = await axios.post('/api/patterndrill/complete', {
-                task_id: taskId,
+                task_id: parseInt(taskId),
                 user_id: userId,
                 branch_code: branchCode,
                 re_study: reStudy,
                 re_study_no: reStudyNo + 1,
                 logs: finalLogs
             });
-            setAiSummary(res.data.summary);
-            setMode('RESULT');
+            
+            if (res.data.result_code === "200") {
+                setAiSummary(res.data.summary);
+                setSaveResponse(res.data);
+                setLogs(finalLogs);
+                setMode('RESULT');
+                
+                if (window.opener && typeof window.opener.fnReload === 'function') {
+                    window.opener.fnReload();
+                }
+            }
         } catch (err) { 
+            console.error("❌ 저장 실패:", err.response?.data);
             alert("저장 실패"); 
         }
     };
 
-    if (!taskInfo || contents.length === 0) return <div className="loading_box">Loading...</div>;
+    // [8] 재학습(RETRY) 핸들러
+    const handleRetryFailed = () => {
+        const failedItemNos = logs
+            .filter(l => !l.is_unscramble_correct)
+            .map(l => l.study_item_no);
+
+        const retryList = originalContents.filter(item => failedItemNos.includes(item.study_item_no));
+
+        if (retryList.length > 0) {
+            setContents(retryList);
+            setMode('UNSCRAMBLE');
+        } else {
+            setContents(originalContents);
+            setMode('FLASHCARD');
+        }
+    };
+
+    if (!taskInfo || originalContents.length === 0) return <div className="loading_box">Loading...</div>;
 
     return (
         <div id="eduwrap">
-            {/* 상단 헤더 정보 구역 */}
             <div className="eduhead">
                 <div className="hd_info">
                     <p>교재명 : <span>{taskInfo.study_step2_name}</span></p>
@@ -121,24 +158,13 @@ const PatternDrill = () => {
                 </ul>
             </div>
 
-            {/* 배경 이미지 및 컨텐츠를 담당하는 핵심 구역 (educontainer) */}
             <div className="educontainer" style={{ background: "rgba(255,255,255,0.6)", minHeight: 'calc(100vh - 100px)' }}>
-                
-                {/* 1. 인트로 (배경 유지를 위해 educontainer 내부에 배치) */}
                 {mode === 'START' && (
-                    <PatternDrill_Intro 
-                        step1Name={taskInfo.study_step1_name} 
-                        userId={userId} 
-                        onStart={handleStartPatternDrill} 
-                    />
+                    <PatternDrill_Intro step1Name={taskInfo.study_step1_name} userId={userId} onStart={handleStartPatternDrill} />
                 )}
-
-                {/* 2. 플래시카드 */}
                 {mode === 'FLASHCARD' && (
                     <PatternDrill_FlashCard contents={contents} onComplete={() => setMode('FLASHCARD_END')} />
                 )}
-
-                {/* 3. 플래시카드 완료 브릿지 */}
                 {mode === 'FLASHCARD_END' && (
                     <div className="conbox1 w1">
                         <div className="speech">
@@ -155,54 +181,29 @@ const PatternDrill = () => {
                         </div>
                     </div>
                 )}
-
-                {/* 4. 패턴드릴(스피킹 실전) */}
                 {mode === 'DRILL' && (
-                    <PatternDrill_Drills contents={contents} onComplete={handleDrillComplete} />
+                  <PatternDrill_Drills 
+                   contents={contents} 
+                   onComplete={handleDrillComplete} 
+                   task_id={taskId}      // 추가
+                   user_id={userId}      // 추가
+                   branch_code={branchCode} // 추가
+                   />
                 )}
-
-                {/* 5. 패턴드릴 결과 리포트 */}
                 {mode === 'REPORT' && (
-                    <div className="result_page" style={{textAlign:'center', padding:'30px'}}>
-                        <div className="boxline" style={{background:'#fff', padding:'40px', borderRadius:'30px', border:'2px solid #007bff'}}>
-                            <h2 style={{fontSize:'28px', color:'#333', marginBottom:'20px'}}>스피킹 분석 리포트</h2>
-                            <div style={{display:'flex', justifyContent:'center', gap:'30px', marginBottom:'30px'}}>
-                                <div style={{background:'#e3f2fd', padding:'20px', borderRadius:'15px', width:'150px'}}>
-                                    <p style={{color:'#2196f3'}}>정확함</p>
-                                    <p style={{fontSize:'32px', fontWeight:'bold'}}>{drillStats.correct}</p>
-                                </div>
-                                <div style={{background:'#ffebee', padding:'20px', borderRadius:'15px', width:'150px'}}>
-                                    <p style={{color:'#f44336'}}>미흡함</p>
-                                    <p style={{fontSize:'32px', fontWeight:'bold'}}>{drillStats.wrong}</p>
-                                </div>
-                            </div>
-                            <button className="go_btn" onClick={() => setMode('UNSCRAMBLE')}>UNSCRAMBLE 시작</button>
-                        </div>
-                    </div>
+                    <PatternDrill_SpeakingReport logs={logs} stats={drillStats} onNext={() => setMode('UNSCRAMBLE')} />
                 )}
-
-                {/* 6. 언스크램블 */}
                 {mode === 'UNSCRAMBLE' && (
                     <PatternDrill_Unscramble contents={contents} onComplete={handleFinalSave} />
                 )}
-
-                {/* 7. 최종 결과창 */}
                 {mode === 'RESULT' && (
-                    <div className="result_page" style={{textAlign:'center', padding:'30px'}}>
-                        <div className="boxline" style={{background:'#fff', padding:'40px', borderRadius:'30px', border:'2px solid #007bff'}}>
-                            <img src="/static/study/images/img_logo.png" alt="Finish" style={{maxWidth:'180px', marginBottom:'20px'}} />
-                            <div className="feedbackBoxStyle" style={{background:'#f8f9fa', padding:'25px', borderRadius:'15px', marginBottom:'30px'}}>
-                                <p style={{fontSize:'18px', color:'#555', lineHeight:'1.6'}}>{aiSummary}</p>
-                            </div>
-                            <div style={{display:'flex', justifyContent:'center', gap:'15px'}}>
-                                <button className="go_btn" style={{background:'#6c757d'}} onClick={() => window.location.reload()}>다시하기</button>
-                                <button className="go_btn" onClick={() => window.close()}>학습 종료</button>
-                            </div>
-                        </div>
-                    </div>
+                    <PatternDrill_FinalResult 
+                        aiSummary={aiSummary} 
+                        failCount={saveResponse?.fail_count || 0} 
+                        onRetry={handleRetryFailed} 
+                    />
                 )}
             </div>
-
             <style>{`
                 .loading_box { display: flex; justify-content: center; align-items: center; height: 100vh; font-weight: bold; font-size: 20px; }
                 #eduwrap { touch-action: manipulation; }

@@ -179,11 +179,8 @@ const DictaMain = () => {
                 {mode === 'START' && (
                     <DictaIntro 
                         words={scrambleWords} 
-                        onStart={() => {
-                            unlockAudio(); // [추가] 모바일 오디오 잠금 해제
-                            setMode('SCRAMBLE');
-                            setStudyStartTime(Date.now());
-                        }} 
+                        // 🚀 [수정] 아래 익명 함수 대신 미리 만들어둔 handleStartDictation을 연결합니다.
+                        onStart={handleStartDictation} 
                     />
                 )}
                 

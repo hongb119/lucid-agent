@@ -1,12 +1,10 @@
-version: '3.8'
-
 services:
-  # 1. Nginx Proxy (대문 역할)
+  # 1. Nginx Proxy
   lucid-proxy:
     image: nginx:latest
     container_name: lucid_proxy
     ports:
-      - "8001:80"
+      - "8001:8001" 
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d
     depends_on:
@@ -15,26 +13,29 @@ services:
     networks:
       - lucid-network
 
-  # 2. AI 에이전트 백엔드 (Python)
-  lucid-agent-be:  # 서비스 이름을 컨테이너 이름과 맞췄습니다.
-    image: python:3.9-slim
+  # 2. AI 에이전트 백엔드 (Python FastAPI)
+  lucid-agent-be:
+    # 🚀 수정: Python 3.9에서 최신 라이브러리와 호환성이 좋은 3.10으로 업그레이드
+    image: python:3.10-slim 
     container_name: lucid_agent_be
     volumes:
       - ./backend:/app
     working_dir: /app
     ports:
-      - "8081:8000"  # 외부에서 8081로 접속 가능
+      - "8081:8000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # [중요] 필요한 패키지를 명시적으로 설치
+    # 🚀 수정: pip 자체를 먼저 업그레이드하여 설치 에러를 방지합니다.
     command: >
-      bash -c "pip install fastapi uvicorn mysql-connector-python openai python-dotenv pydub sqlalchemy python-multipart && 
+      bash -c "pip install --upgrade pip && 
+               pip install --no-cache-dir -r requirements.txt && 
+               pip install pdfplumber && 
                uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
     networks:
       - lucid-network
 
-  # 3. AI 에이전트 프론트엔드 (React)
-  lucid-agent-fe:  # 서비스 이름을 컨테이너 이름과 맞췄습니다.
+  # 3. AI 에이전트 프론트엔드 (React Vite)
+  lucid-agent-fe:
     image: node:20-slim
     container_name: lucid_agent_fe
     volumes:
@@ -45,7 +46,7 @@ services:
     environment:
       - CHOKIDAR_USEPOLLING=true 
       - VITE_WATCH_USE_POLLING=true
-    command: sh -c "npm install && npx vite --host 0.0.0.0 --port 5173"
+    command: sh -c "if [ ! -d 'node_modules' ]; then npm install; fi && npx vite --host 0.0.0.0 --port 5173"
     networks:
       - lucid-network
 

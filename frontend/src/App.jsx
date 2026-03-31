@@ -12,6 +12,9 @@ import VocaMain from './pages/VocaMain';
 import DictaMain from './pages/DictaMain';
 import RSentenceMain from './pages/RSentenceMain';
 import PhoneticsMain from './pages/PhoneticsMain';
+import PlacementMain from './pages/PlacementMain';
+import AdminLevelTestUpload from './pages/AdminLevelTestUpload';
+import AdminAnswerForm from './pages/AdminAnswerForm';
 
 // [핵심] 하위 페이지에서 에이전트를 부를 수 있게 Context 생성 및 내보내기
 export const AgentContext = createContext();
@@ -56,15 +59,19 @@ const App = () => {
           
           {/* 단어 학습 (Voca) */}
           <Route path="/voca" element={<VocaMain />} />
-          <Route path="/rvoca" element={<VocaMain />} />
+          <Route path="/rvoca" element={<DictaMain />} />
           
-          {/* 받아쓰기 (Dicta) */}
-          <Route path="/dicta" element={<DictaMain />} />
-          
+                    
           {/* 문장 복습 및 파닉스 */}
           <Route path="/rsentence" element={<RSentenceMain />} />
           <Route path="/phonetics" element={<PhoneticsMain />} />
-          <Route path="/phonics" element={<PhoneticsMain />} />
+           {/* 레벨테스트 */}
+          <Route path="/placement" element={<PlacementMain />} />
+          <Route path="/adm-pdfupload" element={<AdminLevelTestUpload />} />
+          {/* 2. 관리자 정답 입력 경로 추가 (충돌 방지를 위해 adm- 패턴 권장) */}
+          <Route path="/adm-questionList" element={<AdminAnswerForm level="Stem" />} />
+          
+          
 
           {/* 기본 메인 화면 */}
           <Route path="/" element={

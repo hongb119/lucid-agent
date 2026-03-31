@@ -61,9 +61,11 @@ test_load("phonetics", "/api/phonetics", ["Phonetics"])
 test_load("study_voca", "/api/voca", ["Voca"])
 test_load("study_dicta", "/api/dicta", ["Dictation"])
 test_load("study_rsentence", "/api/rsentence", ["Review"])
+# 5. 관리자 도구
+test_load("admin_test", "/api/admin", ["AdminTools"])
 
 # 4. 기타 서비스 (필요 시)
-test_load("auth", "/api/auth", ["Auth"])
+test_load("level_test", "/api/level_test", ["TestPlayer"])
 
 print("="*60 + "\n")
 

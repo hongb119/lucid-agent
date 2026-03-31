@@ -7,12 +7,13 @@ from datetime import datetime
 
 router = APIRouter()
 
+# 프론트엔드 요청 데이터 구조
 class SaveResultRequest(BaseModel):
     task_id: int
     user_id: str
     re_study: str
     re_study_no: int
-    inputArray: List[dict]
+    inputArray: List[dict] # 가장 안전한 dict 리스트 형태
 
 # 1. 단어 목록 로드 (일반/복습 분기)
 @router.get("/fetch-words")
@@ -76,70 +77,124 @@ async def get_random_words(data: dict):
         if connection: connection.close()
 
 # 3. 결과 저장 및 AI 코멘트 생성
+# 3. 결과 저장 및 별점 자동 처리 (PHP 레거시 완벽 호환)
 @router.post("/save-results")
 async def save_voca_results(req: SaveResultRequest):
     connection = None
     try:
+        print(f"🚀 [SAVE START] Task ID: {req.task_id}, User ID: {req.user_id}")
         connection = get_db_connection()
         cursor = connection.cursor(dictionary=True)
         
-        # 상세 결과 초기화
-        cursor.execute("DELETE FROM splucid_result_word WHERE task_id = %s AND study_user_id = %s AND re_study_no = %s", 
-                       (req.task_id, req.user_id, req.re_study_no))
+        if not req.inputArray:
+            return {"result_code": "400", "message": "No input data"}
 
-        sql_insert_detail = """
-            INSERT INTO splucid_result_word (
-                task_id, study_no, study_item_no, re_study_no, 
-                study_user_id, input_eng, input_eng_pass, input_save_date
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        """
-        
+        # 1. 날짜 및 기초 정보 설정
         now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         correct_count = 0
-        wrong_words_list = []
-        study_no = ""
+        total = len(req.inputArray)
 
+        # [단계 0] 해당 Task의 숙제 날짜(task_day) 조회
+        cursor.execute("SELECT task_day FROM splucid_task WHERE task_id = %s", (req.task_id,))
+        task_info = cursor.fetchone()
+        if not task_info:
+            return {"result_code": "404", "message": "Task not found"}
+        
+        task_day = task_info['task_day']
+
+        # 2. 상세 결과 삭제 (동일 회차 중복 방지)
+        cursor.execute("""
+            DELETE FROM splucid_result_word 
+            WHERE task_id = %s AND study_user_id = %s AND re_study_no = %s
+        """, (req.task_id, req.user_id, req.re_study_no))
+
+        # 3. 상세 결과 인서트
         for item in req.inputArray:
-            study_no = item.get('study_no', '')
-            is_correct = (item.get('input_eng_pass') == 'Y' and item.get('input_kor_pass') == 'Y')
-            final_pass = 'Y' if is_correct else 'N'
-            
-            if is_correct:
+            is_pass = item.get('input_eng_pass', 'N')
+            if is_pass == 'Y':
                 correct_count += 1
-            else:
-                wrong_words_list.append(f"{item.get('study_eng')}:{item.get('study_kor')}")
-
-            cursor.execute(sql_insert_detail, (
-                req.task_id, study_no, item.get('study_item_no'), req.re_study_no, 
-                req.user_id, item.get('study_eng'), final_pass, now_str
+            
+            cursor.execute("""
+                INSERT INTO splucid_result_word (
+                    task_id, study_no, study_item_no, re_study_no, 
+                    study_user_id, input_eng, input_eng_pass, input_save_date
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                req.task_id, item.get('study_no'), item.get('study_item_no'), 
+                req.re_study_no, req.user_id, item.get('study_eng', ''), 
+                is_pass, now_str
             ))
 
-        total = len(req.inputArray)
-        score = (correct_count / total) * 100 if total > 0 else 0
-        ai_comment = "Perfect Score! 🏆" if score == 100 else "Good Job! 😊" if score >= 80 else "Keep it up! ❤️"
-
-        # 성적표 저장 (DUPLICATE KEY 처리로 중복 방지)
-        sql_report = """
-            INSERT INTO splucid_study_word_report (
-                task_id, user_id, study_no, study_type, total_items, correct_items, wrong_words, ai_comment
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE 
-                correct_items = VALUES(correct_items), wrong_words = VALUES(wrong_words), 
-                ai_comment = VALUES(ai_comment), reg_date = NOW()
+        # 4. 성적 및 숙제 마스터 업데이트 (리스트 학습일자 연동)
+        score = int((correct_count / total) * 100) if total > 0 else 0
+        
+        sql_task_update = """
+            UPDATE splucid_task 
+            SET task_status = 'Y', 
+                task_end_date = %s, 
+                task_score = %s,
+                study_pass_tcnt = %s,
+                re_study_no = %s
+            WHERE task_id = %s AND user_id = %s
         """
-        cursor.execute(sql_report, (
-            req.task_id, req.user_id, study_no, 'Voca', 
-            total, correct_count, ",".join(wrong_words_list), ai_comment
+        cursor.execute(sql_task_update, (
+            now_str, score, correct_count, req.re_study_no, req.task_id, req.user_id
         ))
 
-        # 과제 완료 처리
-        cursor.execute("UPDATE splucid_task SET task_status = 'Y', task_end_date = NOW() WHERE task_id = %s", (req.task_id,))
+        # 5. [핵심] PHP 별점(Star Point) 자동 계산 로직 (SetStarPointSave 이식)
+        # 5-1. 당일 유저 숙제 전체 현황 조회
+        sql_all_tasks = """
+            SELECT task_status, task_day, DATE(task_end_date) as end_date, re_study_no 
+            FROM splucid_task 
+            WHERE user_id = %s AND task_day = %s
+        """
+        cursor.execute(sql_all_tasks, (req.user_id, task_day))
+        all_day_tasks = cursor.fetchall()
+        
+        total_day_cnt = len(all_day_tasks)
+        today_complete_cnt = 0
+        
+        for t in all_day_tasks:
+            if t['task_status'] == 'Y':
+                # PHP 로직: 숙제예정일과 실제완료날짜가 같으면 '기간내 완료'
+                if str(t['task_day']) == str(t['end_date']):
+                    today_complete_cnt += 1
+
+        # 5-2. 별점 점수 산정
+        star_cnt = 0
+        memo = ""
+        if total_day_cnt > 0:
+            if total_day_cnt == today_complete_cnt:
+                star_cnt = 3
+                memo = "모든 숙제 기간내 완료"
+            elif today_complete_cnt > 0 or (total_day_cnt == len([x for x in all_day_tasks if x['task_status'] == 'Y'])):
+                star_cnt = 2
+                memo = "모든 숙제 완료"
+            else:
+                star_cnt = 1
+                memo = "일부 숙제 완료"
+
+            # 5-3. 별점 테이블 갱신 (DELETE 후 INSERT)
+            cursor.execute("DELETE FROM splucid_star_point WHERE user_id = %s AND study_day = %s", (req.user_id, task_day))
+            sql_star_ins = "INSERT INTO splucid_star_point (user_id, study_day, star_cnt, memo) VALUES (%s, %s, %s, %s)"
+            cursor.execute(sql_star_ins, (req.user_id, task_day, star_cnt, memo))
+
+        # 6. 리포트 테이블 업데이트
+        cursor.execute("""
+            INSERT INTO splucid_study_word_report (
+                task_id, user_id, study_no, study_type, total_items, correct_items, reg_date
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE 
+                correct_items = VALUES(correct_items), 
+                reg_date = VALUES(reg_date)
+        """, (req.task_id, req.user_id, req.inputArray[0].get('study_no'), 'Voca', total, correct_count, now_str))
 
         connection.commit()
-        return {"result_code": "200", "report": {"total": total, "correct": correct_count, "ai_comment": ai_comment}}
+        return {"result_code": "200", "report": {"total": total, "correct": correct_count, "score": score}}
 
     except Exception as e:
         if connection: connection.rollback()
+        print(f"❌ [DATABASE ERROR] : {str(e)}")
         return {"result_code": "500", "message": str(e)}
     finally:
         if connection: connection.close()

@@ -177,7 +177,7 @@ async def get_phonetics_random(request_data: PhoneticsRandomRequest):
 
 @router.post('/save')
 async def save_phonetics_results(request_data: PhoneticsSaveRequest):
-    """Phonetics 학습 결과 저장 - 테이블 컬럼명 매칭 수정"""
+    """Phonetics 학습 결과 저장 및 PHP 달력 별점 연동"""
     try:
         input_array = request_data.inputArray
         task_id = request_data.task_id
@@ -187,26 +187,82 @@ async def save_phonetics_results(request_data: PhoneticsSaveRequest):
         if not input_array or not task_id or not user_id:
             raise HTTPException(status_code=400, detail='Missing required parameters')
         
-        # 1. 현재 시간 생성 (input_save_date용)
+        # 1. 데이터 베이스 연결
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+        
         now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-        # 2. Task 정보 업데이트
+        # [단계 1] 기본 정보 및 날짜 조회
+        sql_info = "SELECT task_day FROM splucid_task WHERE task_id = %s"
+        cursor.execute(sql_info, (task_id,))
+        task_info = cursor.fetchone()
+        if not task_info:
+            raise HTTPException(status_code=404, detail="Task not found")
+        
+        task_day = task_info['task_day']
+
+        # [단계 2] Task 마스터 정보 업데이트
+        pass_count = sum(1 for item in input_array if item.get('input_eng_pass') == 'Y')
+        total_count = len(input_array)
+        
         task_update_query = """
         UPDATE splucid_task 
         SET task_status = 'Y', 
-            task_end_date = NOW(),
+            task_end_date = %s,
             study_pass_tcnt = %s,
             study_total_cnt = %s,
-            study_type = 'PHONETICS'
+            study_type = 'PHONETICS',
+            re_study_no = %s
         WHERE task_id = %s AND user_id = %s
         """
+        cursor.execute(task_update_query, (now_str, pass_count, total_count, re_study_no, task_id, user_id))
+
+        # [단계 3] PHP 별점(Star Point) 자동 계산 로직 (SetStarPointSave 이식)
+        # 3-1. 당일 전체 숙제 현황 조회
+        sql_all_tasks = """
+            SELECT task_status, task_day, DATE(task_end_date) as end_date, re_study_no 
+            FROM splucid_task 
+            WHERE user_id = %s AND task_day = %s
+        """
+        cursor.execute(sql_all_tasks, (user_id, task_day))
+        all_day_tasks = cursor.fetchall()
         
-        pass_count = sum(1 for item in input_array if item.get('input_eng_pass') == 'Y')
-        total_count = len(input_array)
-        execute_update(task_update_query, (pass_count, total_count, task_id, user_id))
+        total_day_cnt = len(all_day_tasks)
+        today_complete_cnt = 0
+        re_study_1_cnt = 0
+        re_study_2_cnt = 0
         
-        # 3. 결과 상세 저장 (splucid_result_word)
-        # 컬럼명을 input_save_date로 수정했습니다.
+        for t in all_day_tasks:
+            if t['task_status'] == 'Y':
+                if str(t['task_day']) == str(t['end_date']):
+                    today_complete_cnt += 1
+                if t['re_study_no'] >= 1: re_study_1_cnt += 1
+                if t['re_study_no'] >= 2: re_study_2_cnt += 1
+
+        # 3-2. 별점 점수 산정
+        star_cnt = 0
+        memo = ""
+        if total_day_cnt > 0:
+            if total_day_cnt == today_complete_cnt:
+                star_cnt = 3
+                memo = "모든 숙제 기간내 완료"
+            elif today_complete_cnt > 0 or (total_day_cnt == len([x for x in all_day_tasks if x['task_status'] == 'Y'])):
+                star_cnt = 2
+                memo = "모든 숙제 완료"
+            else:
+                star_cnt = 1
+                memo = "숙제 일부 완료"
+            
+            if re_study_1_cnt == total_day_cnt: star_cnt += 1; memo += " + 복습 1회"
+            if re_study_2_cnt == total_day_cnt: star_cnt += 1; memo += " + 복습 2회"
+
+            # 3-3. 별점 테이블 갱신 (기존 삭제 후 삽입)
+            cursor.execute("DELETE FROM splucid_star_point WHERE user_id = %s AND study_day = %s", (user_id, task_day))
+            sql_star_ins = "INSERT INTO splucid_star_point (user_id, study_day, star_cnt, memo) VALUES (%s, %s, %s, %s)"
+            cursor.execute(sql_star_ins, (user_id, task_day, star_cnt, memo))
+
+        # [단계 4] 결과 상세 저장 (splucid_result_word)
         result_insert_query = """
         INSERT INTO splucid_result_word 
         (task_id, study_no, study_item_no, re_study_no, study_user_id, input_eng, input_eng_pass, input_save_date)
@@ -216,28 +272,27 @@ async def save_phonetics_results(request_data: PhoneticsSaveRequest):
         input_eng_pass = VALUES(input_eng_pass),
         input_save_date = VALUES(input_save_date)
         """
-        
         for item in input_array:
-            execute_update(result_insert_query, (
-                task_id,
-                item.get('study_no'),
-                item.get('study_item_no'),
-                re_study_no,
-                user_id,
-                item.get('input_eng', ''),
-                item.get('input_eng_pass', 'N'),
-                now_str # 'input_save_date'에 현재 시간 할당
+            cursor.execute(result_insert_query, (
+                task_id, item.get('study_no'), item.get('study_item_no'),
+                re_study_no, user_id, item.get('input_eng', ''),
+                item.get('input_eng_pass', 'N'), now_str
             ))
         
+        connection.commit()
         return {
             'result_code': '200',
-            'message': 'Results saved successfully'
+            'message': 'Results and Star Points saved successfully'
         }
         
     except Exception as e:
+        if connection: connection.rollback()
         print(f"❌ Save error: {str(e)}")
         raise HTTPException(status_code=500, detail=f'Server error: {str(e)}')
-        
+    finally:
+        if cursor: cursor.close()
+        if connection: connection.close()
+                
 @router.get('/results')
 async def get_phonetics_results(
     task_id: int,

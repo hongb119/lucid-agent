@@ -4,12 +4,14 @@ const VocaDictation = ({ words, onComplete }) => {
     const [itemNo, setItemNo] = useState(0); 
     const [playCnt, setPlayCnt] = useState(1); 
     const [playState, setPlayState] = useState(true); 
+    
     const audioRef = useRef(new Audio());
     const cur = words[itemNo];
 
-    // [로직] 단어 진입 및 음성 자동 재생
+    // [초기화] 단어 변경 시 로직
     useEffect(() => {
         if (cur) {
+            setPlayCnt(1);
             audioRef.current.src = `https://admin.lucideducation.co.kr/uploadDir/study/mp3/${cur.study_mp3_file}`;
             fnMp3Play();
         }
@@ -20,7 +22,7 @@ const VocaDictation = ({ words, onComplete }) => {
         audioRef.current.play().catch(() => setPlayState(false));
     };
 
-    // [로직] 음성 종료 감지
+    // 음성 종료 감지
     useEffect(() => {
         const audio = audioRef.current;
         const fnMp3Stop = () => {
@@ -30,7 +32,7 @@ const VocaDictation = ({ words, onComplete }) => {
         return () => audio.removeEventListener('ended', fnMp3Stop);
     }, []);
 
-    // [로직] 카드 클릭 (단계별 전환 1->2->3)
+    // 이미지/카드 클릭 시 단계 전환
     const handleViewClick = () => {
         if (playState) return; 
 
@@ -43,21 +45,22 @@ const VocaDictation = ({ words, onComplete }) => {
             fnMp3Play();
         } 
         else if (playCnt === 3) {
-            // 3단계 완료 후 클릭 시 다음 단어로 이동
-            handleNextWord();
+            // 3단계 이후 클릭 시에도 다음 단계로
+            handleNextStep();
         }
     };
 
-    // [로직 추가] 다음 단어로 강제 이동 버튼 클릭 시
-    const handleNextWord = () => {
-        // 음성 재생 중에는 클릭 방지 (데이터 정합성 보장)
-        if (playState) return;
+    // 다음 단계(단어) 이동 함수
+    const handleNextStep = () => {
+        // 음성 재생 중일 때 넘어가면 이전 음성을 정지시킴
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
 
         if (itemNo + 1 === words.length) {
-            onComplete(); // 마지막 단어면 결과 화면으로
+            onComplete(); 
         } else {
             setPlayCnt(1);
-            setItemNo(prev => prev + 1); // 다음 단어 인덱스 증가
+            setItemNo(prev => prev + 1);
         }
     };
 
@@ -70,71 +73,73 @@ const VocaDictation = ({ words, onComplete }) => {
                     <p className="bubble_icon"><img src="/static/study/images/icon01.png" alt="" /></p>
                     <p className="bubble_tx">
                         <span className="tx_box">
-                            이미지를 클릭하며 음성을 따라 말해보세요. (3회 반복)<br />
-                            <b>하단 NEXT 버튼</b>을 누르면 다음 단어로 바로 이동합니다.
+                            이미지를 클릭하면서 들려주는 음성을 큰 소리로 따라 말해보세요. <br />
+                            총 3번을 반복해야 해요.
                         </span>
                     </p>
                 </div>
                 <div className="numbox"><span>{itemNo + 1}/{words.length}</span></div>
             </div>
 
-            {/* 카드 클릭 영역 */}
-            <div className="conbox2" onClick={handleViewClick} style={{ cursor: playState ? 'not-allowed' : 'pointer' }}>
-                <div className="boxline imgnoline">
-                    <div className="boxtext">
-                        <div className="boximgw" style={{minHeight:'350px', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center'}}>
-                            <img 
-                                key={`voca-img-${itemNo}`} // 이미지 갱신 강제화
-                                src={`https://admin.lucideducation.co.kr/uploadDir/study/img/${cur.study_img_file}`} 
-                                className={`imgfun ${playCnt >= 2 ? 'ckevent' : ''}`}
-                                style={{ 
-                                    maxHeight: '300px',
-                                    filter: playCnt >= 2 ? 'blur(8px)' : 'none',
-                                    transition: 'filter 0.5s ease'
-                                }}
-                                alt="" 
-                            />
-                            
-                            {playCnt === 2 && (
-                                <p className="imgtext_en" style={{ display: 'block' }}>
-                                    <span style={{fontSize:'42px', fontWeight:'bold', color:'#333'}}>{cur.study_eng}</span>
-                                </p>
-                            )}
-                            
-                            {playCnt === 3 && (
-                                <p className="imgtext_ko" style={{ display: 'block' }}>
-                                    <span style={{fontSize:'42px', fontWeight:'bold', color:'#e91e63'}}>{cur.study_kor}</span>
-                                </p>
-                            )}
+            {/* 카드/이미지 영역 */}
+            <div className="conbox2" 
+                 onClick={handleViewClick} 
+                 style={{ cursor: playState ? 'not-allowed' : 'pointer', minHeight: '350px' }}>
+                
+                {cur.study_img_file === "N" ? (
+                    <div className={`boxline wordc2 ${playCnt >= 2 ? 'word_eff2' : ''}`}>
+                        <div className="boxtext">
+                            {playCnt >= 3 ? cur.study_kor : cur.study_eng}
                         </div>
                     </div>
-                </div>
+                ) : (
+                    <div className="boxline imgnoline">
+                        <div className="boxtext">
+                            <div className={`boximgw ${playCnt >= 2 ? 'ckevent' : ''}`}>
+                                <img 
+                                    key={`img-${itemNo}`}
+                                    src={`https://admin.lucideducation.co.kr/uploadDir/study/img/${cur.study_img_file}`} 
+                                    className="imgfun"
+                                    alt="" 
+                                    style={{ opacity: 1, display: 'block' }} 
+                                />
+                                <p className="imgtext_en" style={{ display: playCnt === 2 ? 'block' : 'none' }}>
+                                    <span>{cur.study_eng}</span>
+                                </p>
+                                <p className="imgtext_ko" style={{ display: playCnt === 3 ? 'block' : 'none' }}>
+                                    <span>{cur.study_kor}</span>
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
 
-            {/* 하단 버튼 및 NEXT 버튼 영역 */}
-            <div className="btns m_txcenter" style={{marginTop:'30px', display:'flex', flexDirection:'column', alignItems:'center', gap:'20px'}}>
-                <div style={{display:'flex', gap:'10px'}}>
-                    <button type="button" className={`numbtn ${playCnt === 1 ? 'on' : ''}`}>1</button>
-                    <button type="button" className={`numbtn ${playCnt === 2 ? 'on' : ''}`}>2</button>
-                    <button type="button" className={`numbtn ${playCnt === 3 ? 'on' : ''}`}>3</button>
-                </div>
-
-                {/* [추가] 다음 단어 이동 버튼 */}
+            {/* 하단 숫자 버튼 */}
+            <div className="btns">
+                <button type="button" className={`numbtn ${playCnt === 1 ? 'on' : ''}`}>1</button>
+                <button type="button" className={`numbtn ${playCnt === 2 ? 'on' : ''}`}>2</button>
+                <button type="button" className={`numbtn ${playCnt === 3 ? 'on' : ''}`}>3</button>
+            </div>
+            
+            {/* NEXT 버튼 영역: 조건 없이 항상 활성화 */}
+            <div className="btns m_txcenter" style={{ marginTop: '30px', textAlign: 'center' }}>
                 <button 
                     type="button" 
-                    onClick={handleNextWord}
-                    disabled={playState}
+                    onClick={handleNextStep}
                     style={{
                         width: '240px',
                         padding: '15px 0',
                         fontSize: '22px',
                         fontWeight: 'bold',
-                        backgroundColor: playState ? '#ccc' : '#28a745',
+                        backgroundColor: '#28a745', // 항상 초록색
                         color: '#fff',
                         borderRadius: '50px',
                         border: 'none',
                         boxShadow: '0 4px 15px rgba(40,167,69,0.3)',
-                        cursor: playState ? 'wait' : 'pointer'
+                        cursor: 'pointer', // 항상 포인터 커서
+                        opacity: 1,
+                        transition: 'all 0.3s ease'
                     }}
                 >
                     {itemNo + 1 === words.length ? "FINISH STUDY 🏁" : "NEXT WORD ▶▶"}
