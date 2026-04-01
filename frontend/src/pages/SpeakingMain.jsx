@@ -2,12 +2,15 @@ import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 
 const SpeakingMain = ({ step, itemArray, userId, taskId, branchCode, onFinish, onStepChange }) => {
+    // --- [1] 상태 관리 ---
     const [itemNo, setItemNo] = useState(0);
     const [isRecording, setIsRecording] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [localItems, setLocalItems] = useState([]);
     const [timerCnt, setTimerCnt] = useState(0);
-    
+    const [micPermission, setMicPermission] = useState('prompt'); 
+
+    // --- [2] Refs (기능 유지용) ---
     const audioRef = useRef(null);
     const scrollRef = useRef(null);
     const activeSentenceRef = useRef(null);
@@ -20,8 +23,43 @@ const SpeakingMain = ({ step, itemArray, userId, taskId, branchCode, onFinish, o
     const audioCtxRef = useRef(null);
     const animationRef = useRef(null);
 
-    // 1. 데이터 초기화
+    // [고도화] 마이크 권한 실시간 모니터링
+    const monitorMicPermission = async () => {
+        if (navigator.permissions && navigator.permissions.query) {
+            try {
+                const result = await navigator.permissions.query({ name: 'microphone' });
+                setMicPermission(result.state);
+                result.onchange = () => setMicPermission(result.state);
+            } catch (e) {
+                console.warn("Permission API 미지원 브라우저");
+            }
+        }
+    };
+
+    // [고도화] 마이크 에러 핸들러
+    const handleError = (errorName) => {
+        setIsRecording(false);
+        let userMessage = "마이크 초기화에 실패했습니다. 다시 시도해 주세요.";
+        switch (errorName) {
+            case 'NotAllowedError':
+            case 'PermissionDeniedError':
+                userMessage = "마이크 권한이 거부되었습니다.\n주소창의 자물쇠 아이콘을 눌러 허용으로 변경해 주세요.";
+                break;
+            case 'NotReadableError':
+            case 'TrackStartError':
+                userMessage = "마이크가 다른 프로그램(줌, 카톡 등)에서 사용 중입니다.";
+                break;
+            default:
+                console.error("Recording Error:", errorName);
+        }
+        alert(userMessage);
+        if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+        if (autoNextTimeoutRef.current) clearTimeout(autoNextTimeoutRef.current);
+    };
+
+    // --- [3] 초기화 및 데이터 세팅 ---
     useEffect(() => {
+        monitorMicPermission();
         const initialized = itemArray.map(item => ({
             ...item,
             speaking_corr_cnt: 0,
@@ -32,7 +70,7 @@ const SpeakingMain = ({ step, itemArray, userId, taskId, branchCode, onFinish, o
         setLocalItems(initialized);
     }, [itemArray]);
 
-    // 2. 문장 관리 및 오디오 재생
+    // --- [4] 문장 관리 및 오디오 재생 (Shadowing) ---
     useEffect(() => {
         if (!isProcessing && localItems[itemNo]) {
             if (step === 1 && audioRef.current) {
@@ -47,7 +85,7 @@ const SpeakingMain = ({ step, itemArray, userId, taskId, branchCode, onFinish, o
         }
     }, [itemNo, step, localItems, isProcessing]);
 
-    // 3. 비주얼라이저 (파형)
+    // --- [5] 비주얼라이저 (파형) ---
     const startVisualizer = (stream) => {
         if (!canvasRef.current) return;
         if (!audioCtxRef.current) {
@@ -85,7 +123,7 @@ const SpeakingMain = ({ step, itemArray, userId, taskId, branchCode, onFinish, o
         draw();
     };
 
-    // 4. 문장 자동 전환
+    // --- [6] 문장 자동 전환 (Fluency 모드 전용) ---
     const startAutoSentenceSwitch = (currentIndex) => {
         if (currentIndex >= localItems.length) return;
         const currentItem = localItems[currentIndex];
@@ -98,53 +136,48 @@ const SpeakingMain = ({ step, itemArray, userId, taskId, branchCode, onFinish, o
         }, duration);
     };
 
+    // --- [7] 서버 전송 및 분석 (핵심 기능) ---
     const processBatchAnalysis = async (blob) => {
-    setIsProcessing(true); 
-    const formData = new FormData();
-    
-    // [디버깅] 전송 직전 실제 값들을 하나씩 확인합니다.
-    console.log("🔍 [전송 직전 체크] userId:", userId);
-    console.log("🔍 [전송 직전 체크] taskId:", taskId);
-    console.log("🔍 [전송 직전 체크] branchCode:", branchCode);
-    // [로그 2] 백엔드로 쏘기 직전, Props로 받은 데이터 확인
-    console.log("🚩 [실행: SpeakingMain] 백엔드 전송 직전 Props 상태:", { userId, taskId, branchCode });
+        setIsProcessing(true); 
+        const formData = new FormData();
 
-    // 값이 하나라도 없으면 전송하지 않고 중단 (422 에러 방지)
-    if (!userId || !taskId || !branchCode) {
-        alert(`필수 데이터 누락! \nID: ${userId}, Task: ${taskId}, Branch: ${branchCode}`);
-        setIsProcessing(false);
-        return;
-    }
-
-    formData.append("user_code", String(userId));
-    formData.append("task_id", String(taskId)); 
-    formData.append("branch_code", String(branchCode)); 
-    
-    const targetList = itemArray.map(item => item.study_eng);
-    formData.append("target_sentences", JSON.stringify(targetList));
-    formData.append("audio_file", blob, "recording.wav");
-
-    try {
-        const res = await axios.post('/api/speaking/ai-analysis-batch', formData, {
-            headers: { 'Content-Type': 'multipart/form-data' }
-        });
-
-        if (res.data.status === "success") {
-            onFinish(res.data.analysis, timerCnt);
+        if (!userId || !taskId || !branchCode) {
+            alert("필수 데이터 누락! 관리자에게 문의하세요.");
+            setIsProcessing(false);
+            return;
         }
-    } catch (err) {
-        // 에러 발생 시 서버가 주는 상세 메시지를 정확히 출력
-        const errorDetail = err.response?.data?.detail;
-        console.error("❌ 서버 응답 에러 상세:", errorDetail);
-        alert(`분석 실패: ${JSON.stringify(errorDetail)}`);
-    } finally {
-        setIsProcessing(false);
-    }
-};
 
-    // 6. 녹음 제어
+        formData.append("user_code", String(userId));
+        formData.append("task_id", String(taskId)); 
+        formData.append("branch_code", String(branchCode)); 
+        
+        const targetList = itemArray.map(item => item.study_eng);
+        formData.append("target_sentences", JSON.stringify(targetList));
+        formData.append("audio_file", blob, "recording.wav");
+
+        try {
+            const res = await axios.post('/api/speaking/ai-analysis-batch', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
+            if (res.data.status === "success") {
+                onFinish(res.data.analysis, timerCnt);
+            }
+        } catch (err) {
+            console.error("❌ 분석 서버 에러:", err.response?.data);
+            alert("AI 분석 서버와 통신 중 오류가 발생했습니다.");
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    // --- [8] 녹음 제어 로직 ---
     const toggleRecording = async () => {
         if (isProcessing) return;
+        if (micPermission === 'denied') {
+            alert("마이크 권한을 허용해 주세요.");
+            return;
+        }
+        
         if (!isRecording) {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -155,6 +188,13 @@ const SpeakingMain = ({ step, itemArray, userId, taskId, branchCode, onFinish, o
                 
                 mediaRecorderRef.current.onstop = async () => {
                     const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+                    // 🚩 백엔드 전송 전 "최후의 방어선"
+                    if (blob.size < 2000) { // 파일이 너무 작으면 (거의 무음 수준)
+                      alert("음성이 감지되지 않았습니다. 조금 더 크게 말씀해 주세요!");
+                      setIsRecording(false);
+                      setIsProcessing(false);
+                      return; 
+                    }
                     await processBatchAnalysis(blob);
                     stream.getTracks().forEach(t => t.stop());
                     if (animationRef.current) cancelAnimationFrame(animationRef.current);
@@ -163,9 +203,12 @@ const SpeakingMain = ({ step, itemArray, userId, taskId, branchCode, onFinish, o
                 mediaRecorderRef.current.start();
                 setIsRecording(true);
                 setTimerCnt(0);
-                timerIntervalRef.current = setInterval(() => { setTimerCnt(prev => prev + 1); }, 1000);
+                timerIntervalRef.current = setInterval(() => setTimerCnt(v => v + 1), 1000);
                 startAutoSentenceSwitch(0); 
-            } catch (err) { alert("마이크 권한을 확인해주세요."); }
+
+            } catch (err) {
+                handleError(err.name);
+            }
         } else {
             if (mediaRecorderRef.current) mediaRecorderRef.current.stop();
             setIsRecording(false);
@@ -183,9 +226,11 @@ const SpeakingMain = ({ step, itemArray, userId, taskId, branchCode, onFinish, o
                     <p className="bubble_icon"><img src="/static/study/images/icon01.png" alt="" /></p>
                     <p className="bubble_tx">
                         <span className="tx_box">
-                            {isProcessing ? "AI 분석 중입니다... 잠시만 기다려주세요." : 
+                            {micPermission === 'denied' ? (
+                                <span style={{ color: '#ff4d4f', fontWeight: 'bold' }}>⚠️ 마이크 권한 차단됨 (자물쇠 아이콘 확인)</span>
+                            ) : isProcessing ? "AI 분석 중입니다... 잠시만 기다려주세요." : 
                              isRecording ? `녹음 중... (${timerCnt}초)` : 
-                             "마이크를 클릭하고 문장을 속도에 맞춰 읽어보세요."}
+                             <>들려주는 음성과 똑같은 속도로 문장을 읽어주세요.<br/>이 연습을 많이 하면 영어 말하기 왕이 될 수도 있어요.</>}
                         </span>
                     </p>
                 </div>
@@ -196,11 +241,21 @@ const SpeakingMain = ({ step, itemArray, userId, taskId, branchCode, onFinish, o
 
             <div className="conbox2" style={{ display: 'flex', gap: '20px', marginTop: '20px' }}>
                 <div className="divide1" style={{ flex: 1 }}>
-                    <div className="boxline he_long" ref={scrollRef} style={{ overflowY: 'auto', height: '350px' }}>
+                    <div className="boxline he_long" ref={scrollRef} style={{ overflowY: 'auto', height: '380px' }}>
                         <div className="boxtext longtx">
                             {localItems.map((item, idx) => (
-                                <div key={idx} ref={idx === itemNo ? activeSentenceRef : null} 
-                                     className={idx === itemNo ? "tx_blue tx_bold" : ""} style={{ padding: '10px', fontSize: '1.2rem' }}>
+                                <div 
+                                    key={idx} 
+                                    ref={idx === itemNo ? activeSentenceRef : null} 
+                                    className={idx === itemNo ? "tx_blue tx_bold" : ""} 
+                                    style={{ 
+                                        padding: '15px 10px', 
+                                        fontSize: '1.8rem', // 🚀 기존 PHP 급 큰 글씨 복구
+                                        lineHeight: '1.6',
+                                        wordBreak: 'keep-all',
+                                        transition: 'all 0.3s'
+                                    }}
+                                >
                                     {item.study_eng}
                                 </div>
                             ))}
@@ -227,13 +282,9 @@ const SpeakingMain = ({ step, itemArray, userId, taskId, branchCode, onFinish, o
                             onClick={toggleRecording} 
                             className={`ch_btn ${isRecording ? 'ani_btn' : ''}`} 
                             disabled={isProcessing}
-                            style={{ border: 'none', background: 'none', cursor: 'pointer' }}
+                            style={{ border: 'none', background: 'none', cursor: 'pointer', opacity: micPermission === 'denied' ? 0.5 : 1 }}
                         >
-                            <img 
-                                src={isRecording ? "/static/study/images/btn_s09.png" : "/static/study/images/btn_s01.png"} 
-                                alt="Mic" 
-                                style={{ width: '70px' }} 
-                            />
+                            <img src={isRecording ? "/static/study/images/btn_s09.png" : "/static/study/images/btn_s01.png"} alt="Mic" style={{ width: '70px' }} />
                         </button>
                     </div>
                 )}
@@ -241,7 +292,8 @@ const SpeakingMain = ({ step, itemArray, userId, taskId, branchCode, onFinish, o
 
             <style>{`
                 .ch_btn.ani_btn { animation: pulse 1.5s infinite; filter: drop-shadow(0px 0px 10px #007bff); }
-                @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.7; transform: scale(1.05); } }
+                @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+                .tx_blue.tx_bold { color: #007bff !important; font-weight: 800 !important; }
             `}</style>
         </div>
     );

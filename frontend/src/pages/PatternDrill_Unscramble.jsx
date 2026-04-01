@@ -32,8 +32,9 @@ const PatternDrill_Unscramble = ({ contents, onComplete, isRetry = false }) => {
         const shuffled = shuffleArray(words);
         setQuizWords(shuffled);
         
+        // 문제 진입 시 자동 재생
         playAudio(currentItem.study_mp3_file);
-    }, [itemNo, currentItem]); // currentItem 변경 시에도 초기화되도록 추가
+    }, [itemNo, currentItem]);
 
     const shuffleArray = (array) => {
         const newArray = [...array];
@@ -44,9 +45,15 @@ const PatternDrill_Unscramble = ({ contents, onComplete, isRetry = false }) => {
         return newArray;
     };
 
+    // [로직 수정] 음성 재생 함수
     const playAudio = (file) => {
-        if (!file) return;
-        audioRef.current.src = `https://admin.lucideducation.co.kr/uploadDir/study/mp3/${file}`;
+        const targetFile = file || currentItem?.study_mp3_file;
+        if (!targetFile) return;
+
+        // 현재 재생 중인 소리가 있다면 중지하고 처음부터 재생
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+        audioRef.current.src = `https://admin.lucideducation.co.kr/uploadDir/study/mp3/${targetFile}`;
         audioRef.current.play().catch(e => console.log("Audio play deferred"));
     };
 
@@ -62,36 +69,39 @@ const PatternDrill_Unscramble = ({ contents, onComplete, isRetry = false }) => {
         setInputWords(inputWords.filter((_, i) => i !== idx));
     };
 
-    // [중요] 결과 계산 전용 함수: 외부 변수(10개 등)를 절대 쓰지 않음
+    // [수정] 결과 계산 및 최종 완료 처리
+   // [수정] 결과 계산 및 최종 완료 처리
     const calculateAndComplete = (allLogs) => {
-        // 1. 현재 이 컴포넌트가 받은 문항 리스트(contents)의 ID들만 추출
-        const currentItemIds = contents.map(item => item.study_item_no);
+        // is_unscramble_correct가 true인 것만 필터링
+        const correctCount = allLogs.filter(log => log.is_unscramble_correct === true).length;
+        const totalCount = contents.length;
+        const failCount = totalCount - correctCount;
 
-        // 2. 로그 중에서 현재 받은 문항들에 해당하는 '마지막' 결과만 필터링
-        const finalStatusMap = {};
-        allLogs.forEach(log => {
-            if (currentItemIds.includes(log.study_item_no)) {
-                finalStatusMap[log.study_item_no] = log.is_unscramble_correct;
-            }
-        });
+        console.log(`[최종통계] 전체:${totalCount}, 정답:${correctCount}, 오답:${failCount}`);
 
-        // 3. 오직 현재 contents 길이를 기준으로만 정답/오답 산출
-        const statusValues = Object.values(finalStatusMap);
-        const correct = statusValues.filter(v => v === true).length;
-        
-        const finalStats = {
-            correct: correct,
-            wrong: contents.length - correct // (1 - 1 = 0 이 나옴)
+        const reportData = {
+            fail_count: failCount,
+            pass_count: correctCount,
+            total_count: totalCount,
+            user_name: "", 
+            summary: failCount === 0 ? "완벽합니다!" : "오답을 확인하고 다시 도전해보세요."
         };
 
-        onComplete(allLogs, finalStats);
+        // 부모에게 데이터 전달
+        onComplete(reportData, allLogs);
     };
 
+    // [수정] 다음 문제 진행 로직 (상세 정보 보강)
     const proceedToNext = (isCorrect) => {
+        // [디버깅] 현재 선택된 단어 배열이 무엇인지 콘솔에 출력
+        const finalInputString = inputWords.join(' ').trim();
+        
         const currentLog = {
             study_item_no: currentItem.study_item_no,
-            unscramble_input: inputWords.join(' '),
-            is_unscramble_correct: isCorrect
+            question_text: currentItem.study_eng, 
+            unscramble_input: finalInputString, // 여기서 문자열을 확정해서 넘김
+            is_unscramble_correct: isCorrect,
+            study_mp3_file: currentItem.study_mp3_file 
         };
         
         const updatedResults = [...results, currentLog];
@@ -100,36 +110,50 @@ const PatternDrill_Unscramble = ({ contents, onComplete, isRetry = false }) => {
         if (itemNo + 1 < contents.length) {
             setItemNo(prev => prev + 1);
         } else {
-            // 마지막 문제일 때 계산 함수 호출
+            // 마지막 문제라면 리포트 데이터 생성 후 완료
             calculateAndComplete(updatedResults);
         }
     };
 
-    const handleUnscrambleSubmit = async () => {
-        const inputStr = inputWords.join(' ');
-        let isCorrect = false;
+   const handleUnscrambleSubmit = () => {
+        // 1. 내가 선택한 문장 조립 (양끝 공백 제거 및 연속 공백 한 칸으로 통일)
+        const myAnswer = inputWords.join(' ').trim().replace(/\s+/g, ' ');
         
-        try {
-            const formData = new FormData();
-            formData.append('study_item_no', currentItem.study_item_no);
-            formData.append('input_text', inputStr);
-            const response = await axios.post('/api/patterndrill/check-unscramble', formData);
-            isCorrect = response.data.is_correct;
-        } catch (error) {
-            const targetStr = currentItem.study_eng;
-            isCorrect = inputStr.toLowerCase().replace(/[.?!]/g, '') === targetStr.toLowerCase().replace(/[.?!]/g, '');
-        }
+        // 2. 실제 정답 문장 가져오기
+        const correctAnswer = currentItem.study_eng || "";
 
+        // 3. 비교를 위한 정규화 (소문자 변환 및 마침표/콤마 등 구두점 제거)
+        const normalize = (text) => {
+            return text
+                .toLowerCase()
+                .replace(/[.?!,]/g, '') // 구두점 제거
+                .replace(/\s+/g, ' ')   // 연속된 공백 하나로
+                .trim();                // 앞뒤 공백 제거
+        };
+
+        const cleanMyAnswer = normalize(myAnswer);
+        const cleanCorrectAnswer = normalize(correctAnswer);
+
+        
+        
+        // 4. 최종 판정 (토씨 하나 안 틀리고 똑같아야 함)
+        const isCorrect = (cleanMyAnswer === cleanCorrectAnswer);
+        
+        
+
+        // 5. 상태 반영 및 피드백
         setFeedback(isCorrect ? 'CORRECT' : 'WRONG');
+        
+        // 정답/오답 소리 재생 (원어민 음성)
         playAudio(currentItem.study_mp3_file);
 
-        // [방지 처리] 음성이 완전히 끝난 후 이벤트 발생
+        // 6. 음성 종료 후 다음 문제로 (판정 결과를 직접 전달)
         audioRef.current.onended = () => {
             audioRef.current.onended = null;
             setTimeout(() => proceedToNext(isCorrect), 500);
         };
         
-        // 음성 파일 문제 대비용 안전 타이머
+        // 안전 타이머 (음성 재생 실패 대비)
         setTimeout(() => {
             if (audioRef.current.onended) {
                 audioRef.current.onended = null;
@@ -150,6 +174,15 @@ const PatternDrill_Unscramble = ({ contents, onComplete, isRetry = false }) => {
                     </p>
                 </div>
                 <div className="numbox"><span>{itemNo + 1}/{contents.length}</span></div>
+            </div>
+
+            {/* [추가] 음성 듣기 버튼 영역 */}
+            <div className="conbox4" style={{ marginBottom: '20px' }}>
+                <div className="sp_btn">
+                    <button type="button" onClick={() => playAudio()}>
+                        <img src="/static/study/images/btn01.png" alt="음성듣기" style={{ cursor: 'pointer' }} />
+                    </button>
+                </div>
             </div>
 
             <div className={`conbox9 ${feedback}`}>

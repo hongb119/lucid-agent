@@ -25,6 +25,31 @@ const PatternDrill_Drills = ({ contents, onComplete, task_id, user_id, branch_co
         };
     }, []);
 
+    // [추가] 마이크 예외 처리 함수
+    const handleError = (errorName) => {
+        setIsRecording(false);
+        let userMessage = "마이크 초기화에 실패했습니다. 다시 시도해 주세요.";
+
+        switch (errorName) {
+            case 'NotAllowedError':
+            case 'PermissionDeniedError':
+                userMessage = "마이크 권한이 거부되었습니다.\n주소창의 자물쇠 아이콘을 눌러 마이크를 '허용'으로 변경해 주세요.";
+                break;
+            case 'NotFoundError':
+            case 'DevicesNotFoundError':
+                userMessage = "연결된 마이크를 찾을 수 없습니다.\n마이크 연결 상태를 확인해 주세요.";
+                break;
+            case 'NotReadableError':
+            case 'TrackStartError':
+                userMessage = "마이크가 다른 프로그램(줌, 카톡 등)에서 사용 중입니다.\n다른 앱을 종료하고 다시 시도해 주세요.";
+                break;
+            default:
+                console.error("Recording Error:", errorName);
+        }
+        alert(userMessage);
+        setPlayStatus("READY"); // 오류 발생 시 READY 상태로 복구하여 다시 시작할 수 있게 함
+    };
+
     const playAudio = async () => {
         if (!currentItem) return;
         if (recordingTimerRef.current) clearTimeout(recordingTimerRef.current); // 타이머 초기화
@@ -51,14 +76,15 @@ const PatternDrill_Drills = ({ contents, onComplete, task_id, user_id, branch_co
 
     const handleStartRecording = async () => {
         try {
+            // 마이크 권한 요청 및 스트림 획득
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            
             streamRef.current = stream;
             mediaRecorderRef.current = new MediaRecorder(stream);
             audioChunks.current = [];
 
             mediaRecorderRef.current.ondataavailable = (e) => audioChunks.current.push(e.data);
             mediaRecorderRef.current.onstop = () => {
-                // [디버깅] 녹음 중지 시 타이머 해제
                 if (recordingTimerRef.current) {
                     clearTimeout(recordingTimerRef.current);
                     recordingTimerRef.current = null;
@@ -72,17 +98,17 @@ const PatternDrill_Drills = ({ contents, onComplete, task_id, user_id, branch_co
             mediaRecorderRef.current.start();
             setIsRecording(true);
 
-            // 🚀 [디버깅 추가] 20초 자동 타임아웃 로직
+            // 20초 자동 타임아웃
             recordingTimerRef.current = setTimeout(() => {
                 if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
                     console.warn("🚩 20초 시간 초과로 자동 녹음 종료");
                     mediaRecorderRef.current.stop();
                 }
-            }, 20000); // 20초 (20000ms)
+            }, 20000);
 
         } catch (err) {
-            alert("마이크 권한을 확인해주세요.");
-            setPlayStatus("READY");
+            // [수정] 단순 alert 대신 정교한 예외 처리 호출
+            handleError(err.name);
         }
     };
 

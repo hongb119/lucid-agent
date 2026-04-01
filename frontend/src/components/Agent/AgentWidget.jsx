@@ -12,19 +12,17 @@ const AgentWidget = forwardRef(({ user }, ref) => {
     const recognitionRef = useRef(null);
 
     // [로직 1] 음성 출력 - 특수문자 제거 및 언어별 최적화 톤
-    const speak = (text) => {
-        if (!text || !window.speechSynthesis) return;
+    const speak = (text, forceMute = false) => {
+        if (!text || !window.speechSynthesis || forceMute) return; // forceMute가 true면 실행 안 함
+        
         window.speechSynthesis.cancel();
 
-        // 불필요한 기호 제거 (*, [], -, _ 등)
         const cleanText = text.replace(/[^a-zA-Z0-9가-힣\s]/g, '');
-        
-        // 영어 포함 여부에 따른 언어 모드 설정
         const isEnglish = /[a-zA-Z]/.test(cleanText) && !/[ㄱ-ㅎㅏ-ㅣ가-힣]/.test(cleanText);
         
         const utterance = new window.SpeechSynthesisUtterance(cleanText);
         utterance.lang = isEnglish ? 'en-US' : 'ko-KR';
-        utterance.pitch = isEnglish ? 1.4 : 1.7; // 하이톤
+        utterance.pitch = isEnglish ? 1.4 : 1.7;
         utterance.rate = 1.0;
         
         window.speechSynthesis.speak(utterance);
@@ -109,21 +107,29 @@ const AgentWidget = forwardRef(({ user }, ref) => {
         if (!userId) return;
         
         try {
+            // 스몰토크 여부 확인
+            const isSmallTalk = taskData?.task_type === 'smalltalk';
+
             const response = await axios.post('/api/agent/welcome-personalized', {
                 user_id: userId,
                 task_id: String(taskData?.task_id || ""),
                 branch_code: taskData?.branch_code || user?.branch_code || sessionStorage.getItem('branch_code'),
                 re_study: taskData?.re_study || "N"
             });
+
             if (response.data.status === "success") {
                 setData({ 
                     greeting: response.data.greeting, 
                     recommendation: response.data.recommendation 
                 });
                 setBubbleVisible(true);
-                speak(response.data.greeting);
+                
+                //speak(response.data.greeting);
+                
             }
-        } catch (e) { console.error("환영인사 에러:", e); }
+        } catch (e) { 
+            console.error("환영인사 에러:", e); 
+        }
     };
 
     // 외부(App.jsx) 호출용 인터페이스

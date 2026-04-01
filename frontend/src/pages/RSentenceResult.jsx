@@ -1,34 +1,30 @@
 import React from 'react';
 
 const RSentenceResult = ({ reportData, onRetry, onExit }) => {
-    // reportData가 없을 경우를 대비한 안전 장치
     if (!reportData || !reportData.report) return null;
 
     const { report, tracking_logs } = reportData;
 
-    // 틀린 문제 개수 계산 (N 판정 개수)
-    const incorrectCount = tracking_logs ? tracking_logs.filter(log => log.is_correct === 'N').length : 0;
-    
-    // 재학습 여부 결정 (틀린게 1개라도 있으면 RETRY 모드)
+    // 1. 틀린 문제(N) 판정된 로그들만 골라냅니다.
+    const incorrectLogs = tracking_logs ? tracking_logs.filter(log => log.is_correct === 'N') : [];
+    const incorrectCount = incorrectLogs.length;
     const needsRetry = incorrectCount > 0;
 
-    // [기존 로직 보존] 오답 재학습 핸들러
+    // 🚩 [수정] 오답 재학습 핸들러: 새로고침 없이 부모 상태 업데이트
     const handleRetryIncorrect = () => {
-        const queryParams = new URLSearchParams(window.location.search);
-        const taskId = queryParams.get('task_id');
-        const userId = queryParams.get('user_id');
-        const currentReStudy = queryParams.get('re_study') || 'N';
+        // 틀린 문항의 study_item_no 리스트를 추출합니다.
+        const incorrectIds = incorrectLogs.map(log => Number(log.study_item_no));
         
-        // re_study 값 변경 규칙 보존 (N→Y, Y→X 등)
-        const newReStudy = currentReStudy === 'N' ? 'Y' : 'X';
-        
-        window.location.href = `${window.location.pathname}?task_id=${taskId}&user_id=${userId}&re_study=${newReStudy}`;
+        // 부모(RSentenceMain)의 handleRetryIncorrect 함수를 호출합니다.
+        if (onRetry) {
+            onRetry(incorrectIds);
+        }
     };
 
     return (
         <div className="educontainer">
             <div className="result_page">
-                {/* 1. 상단 요약 영역 (디자인 및 문구 완벽 복구) */}
+                {/* 상단 요약 영역 */}
                 <div className="res_top">
                     <p className="t1">QUIZ 학습을 완료 했어요.</p>
                     <div className="score_box">
@@ -47,7 +43,7 @@ const RSentenceResult = ({ reportData, onRetry, onExit }) => {
                     </p>
                 </div>
 
-                {/* 2. 상세 내역 테이블 (기존 기능 및 스타일 복구) */}
+                {/* 상세 내역 테이블 */}
                 <div className="res_content" style={{ marginTop: '25px', maxHeight: '350px', overflowY: 'auto', border: '1px solid #eee', borderRadius: '10px' }}>
                     <table className="res_table" style={{ width: '100%', borderCollapse: 'collapse' }}>
                         <thead style={{ position: 'sticky', top: 0, background: '#fcfcfc', zIndex: 1 }}>
@@ -87,20 +83,19 @@ const RSentenceResult = ({ reportData, onRetry, onExit }) => {
                     </table>
                 </div>
 
-                {/* 3. 하단 버튼 영역 (재학습/학습마치기 공존 처리) */}
+                {/* 하단 버튼 영역 */}
                 <div className="conbox3" style={{ marginTop: '30px' }}>
                     <div className="bigbtns" style={{ display: 'flex', gap: '15px', justifyContent: 'center' }}>
                         {needsRetry ? (
-                            // 틀린게 있을 때: [RETRY(오답만)] 와 [학습 마치기]
                             <>
                                 <div className="wid50 w1" style={{ flex: 1 }}>
                                     <button 
                                         type="button" 
                                         className="bigb1" 
-                                        onClick={handleRetryIncorrect}
+                                        onClick={handleRetryIncorrect} // 💡 수정된 오답 리트라이 핸들러
                                         style={{ width: '100%', height: '60px', fontSize: '18px', fontWeight: 'bold', borderRadius: '10px', cursor: 'pointer', background: '#007bff', color: '#fff', border: 'none' }}
                                     >
-                                        RETRY
+                                        틀린것만 RETRY
                                     </button>
                                 </div>
                                 <div className="wid50 w1" style={{ flex: 1 }}>
@@ -115,13 +110,12 @@ const RSentenceResult = ({ reportData, onRetry, onExit }) => {
                                 </div>
                             </>
                         ) : (
-                            // 다 맞았을 때: [전체 다시하기] 와 [학습 마치기]
                             <>
                                 <div className="wid50 w1" style={{ flex: 1 }}>
                                     <button 
                                         type="button" 
                                         className="bigb1" 
-                                        onClick={onRetry} 
+                                        onClick={() => onRetry()} // 전체 다시하기
                                         style={{ width: '100%', height: '60px', fontSize: '18px', fontWeight: 'bold', borderRadius: '10px', cursor: 'pointer', background: '#fff', color: '#333', border: '2px solid #ddd' }}
                                     >
                                         다시하기

@@ -81,7 +81,67 @@ const PatternDrill = () => {
         }
     };
 
-    // [7] 최종 저장 및 결과창 이동 (중복 제거 및 괄호 교정 완료)
+    // [7] 언스크램블 완료 후 처리 (프론트 판정 결과 반영 및 저장)
+   
+    const handleUnscrambleComplete = (reportData, unscrambleLogs) => {
+        // 1. [데이터 병합] 기존 logs(전체)와 방금 푼 unscrambleLogs를 합쳐서 7개(전체) 배열 생성
+        const updatedLogs = originalContents.map((content) => {
+            // 기존 스피킹 로그 찾기
+            const sLog = logs.find(l => l.study_item_no === content.study_item_no);
+            // 이번 언스크램블 결과 찾기 (없으면 기존 log에서 찾음)
+            const uLog = unscrambleLogs.find(u => u.study_item_no === content.study_item_no) 
+                         || logs.find(l => l.study_item_no === content.study_item_no);
+
+            return {
+                study_item_no: parseInt(content.study_item_no),
+                question_text: content.study_eng,
+                study_mp3_file: content.study_mp3_file,
+                student_transcript: sLog?.student_transcript || "",
+                is_speaking_correct: sLog?.is_speaking_correct || false,
+                unscramble_input: uLog?.unscramble_input || "",
+                is_unscramble_correct: uLog?.is_unscramble_correct || false
+            };
+        });
+
+        // 2. [정확한 오답 계산] 상태 업데이트 전 변수로 즉시 계산
+        const finalFailCount = updatedLogs.filter(l => l.is_unscramble_correct === false).length;
+
+        // 3. [즉시 화면 전환] 백엔드 응답을 기다리지 않고 메모리 데이터를 바로 리포트에 던짐
+        // 이 순서가 중요합니다: 데이터를 먼저 세팅하고 화면을 바꿉니다.
+        setLogs(updatedLogs);
+        setSaveResponse({
+            fail_count: finalFailCount,
+            user_name: taskInfo?.user_name || '우리'
+        });
+        
+        // 아주 미세한 지연(0.05초)을 주어 리액트가 상태 업데이트를 인지하게 한 뒤 전환
+        setTimeout(() => {
+            setMode('RESULT');
+        }, 50);
+
+        // 4. [백그라운드 저장] 사용자는 리포트를 보는 동안 서버에 조용히 저장 시도
+        axios.post('/api/patterndrill/complete', {
+            task_id: parseInt(taskId),
+            user_id: userId,
+            branch_code: branchCode,
+            re_study: reStudy,
+            re_study_no: reStudyNo + 1,
+            logs: updatedLogs // 병합된 전체 7개 로그 전송
+        })
+        .then(res => {
+            console.log("✅ 학습 결과가 서버에 안전하게 기록되었습니다.");
+            // 부모창(LMS) 리로드는 서버 저장 성공 시에만 수행
+            if (window.opener && typeof window.opener.fnReload === 'function') {
+                window.opener.fnReload();
+            }
+        })
+        .catch(err => {
+            console.error("❌ 서버 저장 중 오류 발생 (데이터는 리액트 메모리에 유지됨):", err);
+            // 필요 시 여기서 "저장 실패" 알림을 띄울 수 있지만, 화면 전환은 이미 성공한 상태임
+        });
+    };
+
+    // [8] 최종 저장 및 결과창 이동 (중복 제거 및 괄호 교정 완료)
     const handleFinalSave = async (unscrambleLogs) => {
         // 백엔드 모델과 일치하도록 데이터 정제
         const finalLogs = originalContents.map((content) => {
@@ -97,7 +157,7 @@ const PatternDrill = () => {
             };
         });
 
-        console.log("🚀 최종 전송 데이터:", finalLogs);
+        //console.log("🚀 최종 전송 데이터:", finalLogs);
 
         try {
             const res = await axios.post('/api/patterndrill/complete', {
@@ -125,7 +185,7 @@ const PatternDrill = () => {
         }
     };
 
-    // [8] 재학습(RETRY) 핸들러
+    // [] 재학습(RETRY) 핸들러
     const handleRetryFailed = () => {
         const failedItemNos = logs
             .filter(l => !l.is_unscramble_correct)
@@ -193,15 +253,24 @@ const PatternDrill = () => {
                 {mode === 'REPORT' && (
                     <PatternDrill_SpeakingReport logs={logs} stats={drillStats} onNext={() => setMode('UNSCRAMBLE')} />
                 )}
+                {/* [수정] 언스크램블 학습 단계 */}
                 {mode === 'UNSCRAMBLE' && (
-                    <PatternDrill_Unscramble contents={contents} onComplete={handleFinalSave} />
-                )}
-                {mode === 'RESULT' && (
-                    <PatternDrill_FinalResult 
-                        aiSummary={aiSummary} 
-                        failCount={saveResponse?.fail_count || 0} 
-                        onRetry={handleRetryFailed} 
+                    <PatternDrill_Unscramble 
+                        contents={contents} 
+                        onComplete={handleUnscrambleComplete} // 함수명 변경하여 연동
                     />
+                )}
+                {/* [수정] 최종 결과 리포트 (기존 PHP 화면과 맞춘 컴포넌트) */}
+                {mode === 'RESULT' && (
+                   <PatternDrill_FinalResult 
+                       reportData={{
+                     // saveResponse가 아직 null일 경우를 대비해 logs에서 직접 계산한 값을 백업으로 사용
+                     fail_count: saveResponse?.fail_count ?? logs.filter(l => !l.is_unscramble_correct).length,
+                     user_name: taskInfo?.user_name || '우리'
+                  }}
+                  logs={logs} 
+                   onRetry={handleRetryFailed} 
+                 />
                 )}
             </div>
             <style>{`

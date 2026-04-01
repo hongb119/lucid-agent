@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 
 const VocaQuiz = ({ words, taskId, reStudy, onComplete }) => {
-    // PHP 변수들처럼 관리
     const [itemNo, setItemNo] = useState(0); 
     const [engList, setEngList] = useState([]); 
     const [korList, setKorList] = useState([]); 
@@ -10,39 +9,45 @@ const VocaQuiz = ({ words, taskId, reStudy, onComplete }) => {
     const [playState, setPlayState] = useState(true); 
     const [pass, setPass] = useState({ eng: false, kor: false });
     const [quizResults, setQuizResults] = useState([]);
+    const [isNextLoading, setIsNextLoading] = useState(false); // 중복 방지 플래그
 
     const audioRef = useRef(null);
     const timerRef = useRef(null);
 
-    // [핵심] 현재 단어 데이터를 가져오는 함수 (인덱스 초과 방지)
     const getCurWord = (idx) => (words && words[idx]) ? words[idx] : null;
 
-    // 초기화 (PHP의 $(function(){}))
     useEffect(() => {
         if (words && words.length > 0 && quizResults.length === 0) {
             setQuizResults(words.map(w => ({ ...w, input_eng_pass: 'N', input_kor_pass: 'N' })));
-            // 약간의 지연을 주어 상태 안정화 후 첫 문제 시작
             setTimeout(() => fnQuest(0), 100);
         }
         return () => {
             if (timerRef.current) clearInterval(timerRef.current);
+            stopAudio(); // 컴포넌트 언마운트 시 오디오 중단
         };
     }, [words.length]);
 
-    // PHP의 fnQuest() 역할: 다음 문제를 완전히 준비하고 화면을 띄움
+    // 오디오 중단 및 초기화 공통 함수
+    const stopAudio = () => {
+        if (audioRef.current) {
+            audioRef.current.pause();
+            audioRef.current.currentTime = 0;
+            audioRef.current.src = ""; // 소스 초기화로 잔향 제거
+        }
+    };
+
     const fnQuest = async (no) => {
         const targetWord = getCurWord(no);
         if (!targetWord) return;
 
         try {
-            // 이전 타이머 정리
             if (timerRef.current) clearInterval(timerRef.current);
             
+            setIsNextLoading(false); 
             setPlayState(true);
             setPass({ eng: false, kor: false });
             setTimeLeft(15);
 
-            // API로 오답 리스트 가져오기
             const res = await axios.post(`/api/voca/studyPVocaStepRandom`, {
                 study_eng: targetWord.study_eng
             });
@@ -53,15 +58,15 @@ const VocaQuiz = ({ words, taskId, reStudy, onComplete }) => {
                 
                 setEngList(shuffle(combined));
                 setKorList(shuffle(combined));
-                
-                // 데이터 준비가 완전히 끝난 후 인덱스 변경 (이 시점에 화면이 바뀜)
                 setItemNo(no);
                 
-                // 약간의 지연 후 음성 재생 (상태 안정화)
+                // 데이터 세팅 후 이전 음성이 남아있지 않도록 확실히 처리
+                stopAudio();
+
                 setTimeout(() => {
                     fnMp3Play(targetWord);
                     fnTimer();
-                }, 200);
+                }, 300); // 렌더링 안정화를 위해 지연시간 약간 늘림
             }
         } catch (err) {
             console.error("문항 로드 실패:", err);
@@ -84,9 +89,10 @@ const VocaQuiz = ({ words, taskId, reStudy, onComplete }) => {
 
     const handleTimeOut = () => {
         setPass({ eng: true, kor: true });
-        // PHP 원본: 타임아웃 시 음성 다시 재생 후 정답 노출
+        // 타임아웃 시에도 음성을 다시 들려줄 때 겹치지 않게 stop 후 재생
+        stopAudio();
         fnMp3Play();
-        setTimeout(() => fnNextStep(), 1500);
+        // 타임아웃 정답 노출 후 다음 문제는 음성이 끝난 뒤 진행되도록 handleAudioEnd에서 처리됨
     };
 
     const fnMp3Play = (wordObj) => {
@@ -94,38 +100,37 @@ const VocaQuiz = ({ words, taskId, reStudy, onComplete }) => {
         if (!audioRef.current || !target?.study_mp3_file) return;
 
         try {
-            // 현재 재생 중인 음성과 동일하면 무시
-            if (audioRef.current.src.includes(target.study_mp3_file) && !audioRef.current.paused) {
-                return;
-            }
-            
-            audioRef.current.pause();
-            audioRef.current.currentTime = 0;
-            
+            stopAudio(); // 재생 전 무조건 정지
+
             setPlayState(true);
             audioRef.current.src = `https://admin.lucideducation.co.kr/uploadDir/study/mp3/${target.study_mp3_file}`;
-            audioRef.current.play().catch(e => console.log("재생 중단:", e.message));
+            
+            // 재생 로직 (브라우저 정책 대응)
+            const playPromise = audioRef.current.play();
+            if (playPromise !== undefined) {
+                playPromise.catch(e => {
+                    console.log("재생 인터랙션 대기:", e.message);
+                    setPlayState(false);
+                });
+            }
         } catch (error) {
             console.error("음성 재생 오류:", error);
+            setPlayState(false);
         }
     };
 
-    // PHP의 fnMp3Stop() 역할: 음성이 끝나면 다음 문제로 자동 진행
     const handleAudioEnd = () => {
         setPlayState(false);
-        // PHP 원본: 음성이 끝나면 다음 문제로 진행 (단, 정답을 맞혔을 때만)
-        if (pass.eng && pass.kor) {
-            if (itemNo + 1 < words.length) {
-                setTimeout(() => fnQuest(itemNo + 1), 1000);
-            } else {
-                setTimeout(() => onComplete(quizResults), 1000);
-            }
+        // 정답을 다 맞힌 상태이거나 타임아웃이 된 상태에서 음성이 끝났을 때만 다음으로 진행
+        if (pass.eng && pass.kor && !isNextLoading) {
+            setIsNextLoading(true); // 중복 이동 방지
+            setTimeout(() => fnNextStep(), 500);
         }
     };
 
-    // PHP의 fnInputEng / fnInputKor 통합
     const checkAnswer = (type, val) => {
-        if (playState || timeLeft === 0) return;
+        // 음성 재생 중이거나 이미 다음 문제로 넘어가는 중이면 클릭 방지
+        if (playState || timeLeft === 0 || isNextLoading) return;
 
         const currentWord = getCurWord(itemNo);
         const isCorrect = type === 'eng' ? val === currentWord.study_eng : val === currentWord.study_kor;
@@ -136,51 +141,53 @@ const VocaQuiz = ({ words, taskId, reStudy, onComplete }) => {
             if (type === 'kor') updatedResults[itemNo].input_kor_pass = 'Y';
             setQuizResults(updatedResults);
 
-            // 정답 효과음
-            try {
-                audioRef.current.src = "/static/study/suc.mp3";
-                audioRef.current.play().catch(() => {});
-            } catch (e) {}
+            // 정답 효과음 재생 전 기존 중지
+            stopAudio();
+            audioRef.current.src = "/static/study/suc.mp3";
+            audioRef.current.play().catch(() => {});
             
             setPass(prev => {
                 const newState = { ...prev, [type]: true };
+                // 영/한 모두 맞췄을 때
                 if (newState.eng && newState.kor) {
                     if (timerRef.current) clearInterval(timerRef.current);
+                    // 효과음이 들릴 시간을 주고 다음 단계 판단
+                    // 여기서는 효과음이 짧으므로 1초 뒤에 이동하거나, 
+                    // 필요 시 효과음 끝난 후 이동하도록 수정 가능
                     setTimeout(() => fnNextStep(updatedResults), 1000);
                 }
                 return newState;
             });
         } else {
-            // 오답 효과음
-            try {
-                audioRef.current.src = "/static/study/fail.mp3";
-                audioRef.current.play().catch(() => {});
-            } catch (e) {}
+            stopAudio();
+            audioRef.current.src = "/static/study/fail.mp3";
+            audioRef.current.play().catch(() => {});
         }
     };
 
-    // PHP의 fnNextStep 역할
     const fnNextStep = (finalData) => {
-        // 타이머 정리
         if (timerRef.current) clearInterval(timerRef.current);
         
+        // 이동 전 오디오 완전 종료
+        stopAudio();
+
         if (itemNo + 1 < words.length) {
-            fnQuest(itemNo + 1); // 다음 문제 호출
+            fnQuest(itemNo + 1);
         } else {
-            onComplete(finalData || quizResults); // 저장 페이지로 이동
+            onComplete(finalData || quizResults);
         }
     };
 
-    // 현재 단어 데이터가 없으면 아무것도 안 그림 (안전 가드)
     if (!getCurWord(itemNo)) return null;
 
     return (
         <div id="agent-content" className="educontainer">
+            {/* 상단 레이아웃은 동일 */}
             <div className="conbox1">
                 <div className="speech">
                     <p className="bubble_icon"><img src="/static/study/images/icon01.png" alt="" /></p>
                     <p className="bubble_tx">
-                        <span className="tx_box">스피커 아이콘을 클릭하여 음성을 듣고 영어 단어와 뜻을 선택하세요.</span>
+                        <span className="tx_box">음성이 끝난 후 정답을 선택할 수 있습니다.</span>
                     </p>
                 </div>
                 <div className="numbox"><span>{itemNo + 1}/{words.length}</span></div>
@@ -190,12 +197,7 @@ const VocaQuiz = ({ words, taskId, reStudy, onComplete }) => {
                 <div className="sp_btn">
                     <button 
                         type="button" 
-                        onClick={() => {
-                            // 수동 클릭 시에만 재생 (자동 재생과 중복 방지)
-                            if (!playState) {
-                                fnMp3Play();
-                            }
-                        }}
+                        onClick={() => !playState && fnMp3Play()}
                         style={{
                             opacity: playState ? 0.6 : 1,
                             cursor: playState ? 'not-allowed' : 'pointer'
@@ -235,7 +237,12 @@ const VocaQuiz = ({ words, taskId, reStudy, onComplete }) => {
                     </ul>
                 </div>
             </div>
-            <audio ref={audioRef} onEnded={handleAudioEnd} />
+            {/* 오디오 태그 제어 */}
+            <audio 
+                ref={audioRef} 
+                onEnded={handleAudioEnd} 
+                onError={() => setPlayState(false)} 
+            />
         </div>
     );
 };

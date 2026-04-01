@@ -6,42 +6,37 @@ import RSentenceResult from './RSentenceResult';
 import { AgentContext } from '../App'; 
 
 const RSentenceMain = () => {
-    // [1] AI 에이전트 제어 컨텍스트 (패턴드릴과 동일)
     const { triggerAgent } = useContext(AgentContext);
 
-    // [2] URL 파라미터 추출 및 초기화
     const queryParams = new URLSearchParams(window.location.search);
     const taskId = queryParams.get('task_id');
     const userId = queryParams.get('user_id');
     const reStudy = queryParams.get('re_study') || 'N';
-    const branchCode = queryParams.get('branch_code') || 'MAIN'; // 지점코드 추가
+    const branchCode = queryParams.get('branch_code') || 'MAIN';
 
-    // [3] 상태 관리 (기능 누락 없음)
+    // [상태 관리]
     const [mode, setMode] = useState('START'); 
     const [taskInfo, setTaskInfo] = useState(null);
-    const [sentenceList, setSentenceList] = useState([]);
+    const [allSentences, setAllSentences] = useState([]); // 🚩 원본 보존용 (절대 수정 금지)
+    const [sentenceList, setSentenceList] = useState([]); // 🚩 실제 학습 진행용
     const [loading, setLoading] = useState(true);
     const [reportData, setReportData] = useState(null);
     const [trackingLogs, setTrackingLogs] = useState([]);
     const [studyStartTime, setStudyStartTime] = useState(null);
 
-    // [4] 모바일 오디오 잠금 해제용 Ref (iOS 대응)
     const audioRef = useRef(new Audio());
 
     const unlockMobileAudio = () => {
         const audio = audioRef.current;
-        audio.src = "data:audio/wav;base64,UklGRigAAABXQVZRTU9O"; // 묵음 데이터
+        audio.src = "data:audio/wav;base64,UklGRigAAABXQVZRTU9O";
         audio.play().then(() => {
             audio.pause();
-            console.log("🔊 iOS Audio Unlocked");
         }).catch(() => {});
     };
 
-    // [5] 초기 데이터 및 CSS 로드
     useEffect(() => {
         const init = async () => {
             try {
-                // 표준 CSS 파일 로드
                 const cssFiles = ["default.css", "content.css"];
                 cssFiles.forEach(file => {
                     const linkId = `css-${file.replace('.', '-')}`;
@@ -54,13 +49,14 @@ const RSentenceMain = () => {
                     }
                 });
 
-                // 학습 데이터 로드
                 const res = await axios.get(`/api/rsentence/fetch`, {
                     params: { task_id: taskId }
                 });
 
                 if (res.data.status === "success") {
                     setTaskInfo(res.data.task_info);
+                    // 🚩 초기 로드 시 두 곳 모두에 저장
+                    setAllSentences(res.data.sentences);
                     setSentenceList(res.data.sentences);
                 }
             } catch (err) {
@@ -72,33 +68,44 @@ const RSentenceMain = () => {
         init();
     }, [taskId]);
 
-    // [6] 학습 시작 핸들러 (에이전트 인사 + 모드 변경 통합)
     const handleStartStudy = () => {
-        // 기존 로직 1: 모바일 오디오 잠금 해제
         unlockMobileAudio();
-        
-        // 기존 로직 2: 모드 변경 및 시간 측정 시작
         setMode('QUIZ');
         setStudyStartTime(Date.now());
 
-        // 추가 로직: 루아이(AI 에이전트) 인사 호출 (패턴드릴과 동일한 구조)
         if (triggerAgent) {
             triggerAgent({
-                task_id: taskId,
-                user_id: userId,
-                branch_code: branchCode,
-                re_study: reStudy,
-                task_type: 'rsentence' // 리뷰 센텐스 타입 명시
+                task_id: taskId, user_id: userId, branch_code: branchCode,
+                re_study: reStudy, task_type: 'rsentence'
             });
         }
     };
 
-    // [7] 퀴즈 로그 수집
+    // [🚩 수정된 리트라이 핸들러]
+    const handleRetry = (incorrectIds) => {
+        setTrackingLogs([]); // 기존 로그 초기화
+        setReportData(null); // 결과 초기화
+
+        if (incorrectIds && incorrectIds.length > 0) {
+            // 1. 오답만 골라내기 (원본 allSentences에서 필터링)
+            const retryList = allSentences.filter(s => 
+                incorrectIds.includes(Number(s.study_item_no))
+            );
+            setSentenceList(retryList);
+            setMode('QUIZ'); // 인트로 없이 즉시 퀴즈로 (원하실 경우 'START'로 변경 가능)
+        } else {
+            // 2. 전체 다시 하기
+            setSentenceList(allSentences);
+            setMode('START'); 
+        }
+        
+        setStudyStartTime(Date.now()); // 시간 재측정 시작
+    };
+
     const handleCaptureLog = (logEntry) => {
         setTrackingLogs(prev => [...prev, logEntry]);
     };
 
-    // [8] 닫기 핸들러 (부모창 새로고침 포함)
     const handleExit = () => {
         try {
             if (window.opener && !window.opener.closed) {
@@ -112,7 +119,6 @@ const RSentenceMain = () => {
         window.close();
     };
 
-    // [9] 최종 저장 및 완료 로직
     const handleSaveAndFinish = async () => {
         setLoading(true);
         try {
@@ -123,7 +129,8 @@ const RSentenceMain = () => {
                 re_study: String(reStudy),
                 re_study_no: Number(taskInfo?.re_study_no || 0),
                 tracking_logs: trackingLogs,
-                total_time: totalDuration
+                total_time: totalDuration,
+                branch_code: branchCode 
             };
 
             const res = await axios.post(`/api/rsentence/save`, payload);
@@ -143,7 +150,6 @@ const RSentenceMain = () => {
 
     return (
         <div id="eduwrap" style={{ touchAction: 'manipulation' }}>
-            {/* 상단 헤더 정보 구역 */}
             <div className="eduhead">
                 <div className="hd_info">
                     <p>교재명 : <span>{taskInfo.study_step2_name} {taskInfo.study_step3_name}</span></p>
@@ -154,40 +160,39 @@ const RSentenceMain = () => {
                 </ul>
             </div>
 
-            {/* 배경 이미지 및 컨텐츠를 담당하는 핵심 구역 (educontainer) */}
-            <div className="educontainer" style={{ minHeight: 'calc(100vh - 100px)', background: "rgba(255,255,255,0.6)" }}>
+            <div className="educontainer" style={{ 
+                minHeight: 'calc(100vh - 100px)', 
+                background: mode === 'START' ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.6)",
+                transition: 'background 0.5s ease' 
+            }}>
                 
-                {/* 1. 인트로 (디자인 복구 & 이름 호출 추가 & handleStartStudy 연결) */}
                 {mode === 'START' && (
                     <RSentenceStep1 
-                        userId={userId} // 이름 호출용 전달
-                        onStart={handleStartStudy} // 통일된 학습 시작 함수 연결
+                        userId={userId} 
+                        onStart={handleStartStudy} 
                     />
                 )}
                 
-                {/* 2. 퀴즈 실전 */}
                 {mode === 'QUIZ' && (
                     <RSentenceQuiz 
-                        items={sentenceList} 
+                        items={sentenceList} // 🚩 필터링된 리스트가 자동으로 적용됨
                         onLog={handleCaptureLog}
                         onComplete={handleSaveAndFinish} 
                     />
                 )}
 
-                {/* 3. 최종 결과창 */}
                 {mode === 'FINISH' && (
                     <RSentenceResult 
                         reportData={reportData} 
-                        onRetry={() => window.location.reload()} 
+                        onRetry={handleRetry} // 🚩 오답 ID 배열을 받아 처리함
                         onExit={handleExit} 
                     />
                 )}
             </div>
 
-            {/* 모바일 최적화 인라인 스타일 */}
             <style>{`
                 .loading_box { display: flex; justify-content: center; align-items: center; height: 100vh; font-weight: bold; color: #007bff; font-size: 20px; }
-                input, textarea, select { font-size: 16px !important; } /* 아이폰 자동 줌 방지 */
+                input, textarea, select { font-size: 16px !important; }
                 #eduwrap { -webkit-overflow-scrolling: touch; overflow-y: auto; }
             `}</style>
         </div>

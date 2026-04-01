@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useContext } from 'react';
 import axios from 'axios';
-import { AgentContext } from '../App'; // 2. App에서 만든 컨텍스트 임포트
+import { AgentContext } from '../App'; 
 import SpeakingIntro from './SpeakingIntro';
 import SpeakingMain from './SpeakingMain';
 import SpeakingReport from './SpeakingReport';
@@ -14,12 +14,6 @@ const SpeakingStudyPage = () => {
     const branchCode = queryParams.get('branch_code');
     const reStudy = queryParams.get('re_study') || 'N';
 
-    console.log("🚩 [Step 1: URL 파라미터 로드]");
-    console.log("- task_id:", taskId);
-    console.log("- user_id:", userId);
-    console.log("- branch_code:", branchCode); // 여기서 비어있다면 URL 자체가 문제인 겁니다.
-    console.log("🚩 [관문: SpeakingStudyPage] URL 파라미터 로드:", { taskId, userId, branchCode });
-
     // 2. 상태 관리
     const [step, setStep] = useState(1); // 1: Shadowing, 2: Fluency
     const [viewMode, setViewMode] = useState('intro'); // intro, study, report
@@ -27,40 +21,35 @@ const SpeakingStudyPage = () => {
     const [dayTaskView, setDayTaskView] = useState(null);
     const [fluencyResult, setFluencyResult] = useState(null);
     const [loading, setLoading] = useState(true);
+    
+    // 🚩 [추가] 고도화된 로딩 메시지 상태
+    const [loadingMsg, setLoadingMsg] = useState("");
 
     // [로직 추가] iOS/모바일 오디오 잠금 해제
     const unlockAudio = () => {
         const silentAudio = new Audio("data:audio/wav;base64,UklGRigAAABXQVZRTU9O");
         silentAudio.play().then(() => {
             silentAudio.pause();
-            console.log("🔊 Speaking Audio Unlocked");
         }).catch(() => {});
     };
 
-    // [버그 방지: 로그인 체크] 유저ID나 지점코드가 없으면 튕겨냅니다.
+    // [버그 방지: 로그인 체크]
     useEffect(() => {
         if (!userId || !branchCode) {
             alert("로그인 정보가 없거나 지점 코드가 누락되었습니다. 다시 로그인해주세요.");
-            // window.location.href = "/login.php"; // 필요시 주석 해제
             return;
         }
     }, [userId, branchCode]);
 
-
-    // 3. CSS 동적 로드 및 데이터 초기화 (DictaMain 로직 반영 및 branchCode 전달)
+    // 3. CSS 동적 로드 및 데이터 초기화
     useEffect(() => {
         const init = async () => {
-            // [디버깅 로그] 브라우저 콘솔에서 파라미터가 잘 찍히는지 확인하세요.
-            console.log("🚀 파라미터 체크:", { taskId, userId, branchCode });
-
             if (!taskId) {
-                console.error("❌ task_id가 없습니다.");
                 setLoading(false);
                 return;
             }
             
             try {
-                // [핵심] 디자인 파일을 강제로 로드합니다. (중복 로드 방지)
                 const cssFiles = ["default.css", "content.css"];
                 cssFiles.forEach(file => {
                     const linkId = `css-${file.replace('.', '-')}`;
@@ -70,13 +59,11 @@ const SpeakingStudyPage = () => {
                         link.rel = "stylesheet";
                         link.href = `/static/study/css/${file}?v=${new Date().getTime()}`;
                         document.head.appendChild(link);
-                        console.log(`🎨 CSS 로드 완료: ${file}`);
                     }
                 });
 
-                // [수정] 데이터 로드 시 branch_code를 누락 없이 전달합니다.
                 const res = await axios.get(`/api/speaking/info`, { 
-                 params: { task_id: taskId } // 일단 성공했던 이 방식 그대로!
+                    params: { task_id: taskId } 
                 });
 
                 if (res.data && res.data.dayTaskView) {
@@ -85,7 +72,6 @@ const SpeakingStudyPage = () => {
                     console.log("✅ 데이터 로드 성공:", res.data.dayTaskView.study_step2_name);
                 }
             } catch (e) {
-                // 500 에러 발생 시 상세 이유 확인용
                 console.error("❌ 데이터 로드 실패:", e.response?.data || e.message);
             } finally {
                 setLoading(false);
@@ -94,79 +80,124 @@ const SpeakingStudyPage = () => {
         init();
     }, [taskId, userId, branchCode]);
     
-    // SpeakingStudyPage.jsx 내부의 handleFinish 함수
+    // 🚩 [고도화] 최종 저장 및 AI 분석 핸들러
+    const handleFinish = async (analysisData, totalTime) => {
+        if (!analysisData || !Array.isArray(analysisData) || analysisData.length === 0) {
+            alert("분석된 데이터가 없습니다. 다시 시도해주세요.");
+            return;
+        }
 
-    // SpeakingStudyPage.jsx
+        setLoading(true);
+        try {
+            // STEP 1: AI 피드백 생성
+            setLoadingMsg("AI가 목소리를 정밀 분석하여 총평을 작성 중입니다...");
+            const summaryPayload = { 
+                results: analysisData.map(i => ({ 
+                    study_eng: String(i.study_eng || ""), 
+                    transcribed: String(i.transcribed || "") 
+                })) 
+            };
+            
+            const summaryRes = await axios.post('/api/speaking/final-summary', summaryPayload);
+            const overallFeedback = summaryRes.data.summary || "학습이 완료되었습니다.";
 
-const handleFinish = async (analysisData, totalTime) => {
-    // 1. 데이터 도착 확인 (로그)
-    console.log("📍 [로그 3] 부모가 받은 데이터:", analysisData);
-    
-    if (!analysisData || !Array.isArray(analysisData)) {
-        console.error("📍 [에러] 데이터가 배열이 아닙니다!");
-        return;
-    }
+            // STEP 2: 데이터 수치화
+            setLoadingMsg("학습 지표(WPM/정답률)를 계산하고 있습니다...");
+            const safeTime = totalTime > 0 ? totalTime : 1;
+            const totalWords = analysisData.reduce((acc, cur) => acc + (cur.study_eng ? cur.study_eng.split(' ').length : 0), 0);
+            const calculatedWpm = Math.round((totalWords / safeTime) * 60) || 0;
+            const correctCount = analysisData.filter(i => i.transcribed && i.transcribed.trim() !== "").length;
+            const accuracyRate = Math.round((correctCount / analysisData.length) * 100) || 0;
+            const accuracyGrade = accuracyRate >= 90 ? "Excellent" : accuracyRate >= 70 ? "Good" : "Normal";
 
-    setLoading(true);
+            // STEP 3: 서버 저장 및 리포트 갱신
+            setLoadingMsg("결과를 서버에 기록하고 별점을 업데이트 중입니다...");
+            const reportSavePayload = {
+                task_id: parseInt(taskId) || 0,
+                user_id: String(userId || ""),
+                branch_code: String(branchCode || "MAIN"),
+                accuracy: String(accuracyGrade),
+                wpm: Number(calculatedWpm),
+                duration: String(`${totalTime}초`),
+                word_count: Number(totalWords),
+                score: Number(accuracyRate),
+                overall_feedback: String(overallFeedback),
+                details: analysisData.map(r => ({
+                    study_eng: String(r.study_eng || ""),
+                    transcribed: String(r.transcribed || "")
+                }))
+            };
 
-    try {
-        // 2. AI 총평 API 호출 (상대방 대답을 바탕으로 요약 생성)
-        const summaryPayload = { 
-            results: analysisData.map(i => ({ 
-                study_eng: i.study_eng, 
-                transcribed: i.transcribed 
-            })) 
-        };
-        
-        console.log("📍 [로그 4] 총평 API 호출:", summaryPayload);
-        const summaryRes = await axios.post('/api/speaking/final-summary', summaryPayload);
-        console.log("📍 [로그 5] AI 총평 수신:", summaryRes.data.summary);
+            const saveRes = await axios.post('/api/speaking/save-report', reportSavePayload);
 
-        // 3. ⭐ 핵심 수정: 리포트가 읽을 수 있게 '객체'로 포장하기
-        const finalResult = {
-        analysis: analysisData,
-        overall_feedback: summaryRes.data.summary,
-        wpm: 120, 
-        duration: "1:00", 
-        accuracy: "Excellent"
-       };
+            if (saveRes.data.result_code === "200" || saveRes.status === 200) {
+                setLoadingMsg("학습 완료! 리포트를 구성합니다.");
+                
+                const finalResult = {
+                    analysis: analysisData,
+                    overall_feedback: overallFeedback,
+                    wpm: calculatedWpm, 
+                    duration: `${totalTime}초`, 
+                    accuracy: accuracyGrade
+                };
 
-        setFluencyResult(finalResult); 
-        setViewMode('report');
-        
-    } catch (err) {
-        console.error("📍 [에러] 처리 중 오류:", err);
-    } finally {
-        setLoading(false);
-    }
-};
+                // 약간의 지연을 주어 완료 메시지를 인지시킴
+                setTimeout(() => {
+                    setFluencyResult(finalResult); 
+                    setViewMode('report');
+                }, 800);
+            } else {
+                throw new Error("저장 실패");
+            }
+            
+        } catch (err) {
+            console.error("📍 [저장 오류]:", err.response?.data || err);
+            alert("결과 저장 중 문제가 발생했습니다. 네트워크 상태를 확인해주세요.");
+        } finally {
+            // FINISH 모드로 바뀌면 상위 로딩박스에서 해제되도록 지연 처리
+            setTimeout(() => {
+                setLoading(false);
+                setLoadingMsg("");
+            }, 1000);
+        }
+    };
 
     // 학습 시작 핸들러
     const handleStartSpeaking = () => {
         unlockAudio();
         setViewMode('study');
-        
-        // 에이전트 호출 (DictaMain 방식)
         if (triggerAgent) {
             triggerAgent({
-                task_id: taskId,
-                user_id: userId,
-                branch_code: branchCode,
-                re_study: reStudy,
-                task_type: 'speaking'
+                task_id: taskId, user_id: userId, branch_code: branchCode,
+                re_study: reStudy, task_type: 'speaking'
             });
         }
     };
 
-    if (loading || !dayTaskView) return <div className="loading_box">Loading...</div>;
+    // 초기 데이터 로딩 화면
+    if (loading && viewMode === 'intro') {
+        return <div className="loading_box">데이터를 불러오는 중입니다...</div>;
+    }
 
     return (
         <div id="eduwrap" style={{ touchAction: 'manipulation' }}>
+            {/* 🚩 [고도화] AI 분석 전용 로딩 오버레이 */}
+            {loading && loadingMsg && (
+                <div className="ai_loading_overlay">
+                    <div className="ai_loading_content">
+                        <div className="ai_scanner"></div>
+                        <div className="spinner_ring"></div>
+                        <p className="loading_text">{loadingMsg}</p>
+                        <span className="loading_subtext">서버 상태에 따라 최대 10초가 소요될 수 있습니다.</span>
+                    </div>
+                </div>
+            )}
+
             {/* 공통 헤더 */}
             <div className="eduhead">
                 <div className="hd_info">
-                    <p>교재명 : <span>{dayTaskView.study_step2_name}</span></p>
-                    <p>학습명 : <span>Unit{dayTaskView.study_unit}</span></p>
+                    <p>교재명 : <span>{dayTaskView?.study_step2_name}</span></p>
+                    <p>학습명 : <span>Unit{dayTaskView?.study_unit}</span></p>
                 </div>
                 <ul className="hd_btn">
                     <li className={step === 1 ? "on" : ""}><a>SHADOWING</a></li>
@@ -174,27 +205,24 @@ const handleFinish = async (analysisData, totalTime) => {
                 </ul>
             </div>
 
-            {/* 메인 컨테이너 - 배경 투명도 조건부 적용 */}
             <div className="educontainer" style={{ 
                 minHeight: 'calc(100vh - 100px)', 
                 background: viewMode === 'intro' ? "rgba(255,255,255,0.6)" : "none" 
             }}>
                 {viewMode === 'intro' && (
-                    <SpeakingIntro 
-                        onStart={handleStartSpeaking} 
-                    />
+                    <SpeakingIntro onStart={handleStartSpeaking} />
                 )}
 
                 {viewMode === 'study' && (
                     <SpeakingMain 
-                    step={step}
-                    itemArray={itemArray}
-                    userId={userId}      // 전달 확인
-                    taskId={taskId}      // 전달 확인
-                    branchCode={branchCode} // 전달 확인
-                    onFinish={handleFinish}
-                    onStepChange={setStep}
-                   />
+                        step={step}
+                        itemArray={itemArray}
+                        userId={userId}
+                        taskId={taskId}
+                        branchCode={branchCode}
+                        onFinish={handleFinish}
+                        onStepChange={setStep}
+                    />
                 )}
 
                 {viewMode === 'report' && (
@@ -206,13 +234,41 @@ const handleFinish = async (analysisData, totalTime) => {
                 )}
             </div>
 
-            {/* [스타일 추가] 모바일 최적화 및 줌 방지 */}
             <style>{`
-                .loading_box { display: flex; justify-content: center; align-items: center; height: 100vh; font-weight: bold; }
+                .loading_box { display: flex; justify-content: center; align-items: center; height: 100vh; font-weight: bold; font-size: 18px; color: #666; }
+                
+                /* AI 로딩 오버레이 스타일 */
+                .ai_loading_overlay {
+                    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                    background: rgba(255, 255, 255, 0.95);
+                    display: flex; justify-content: center; align-items: center;
+                    z-index: 10000; backdrop-filter: blur(5px);
+                }
+                .ai_loading_content { text-align: center; }
+                
+                .spinner_ring {
+                    width: 50px; height: 50px; border: 4px solid #f3f3f3;
+                    border-top: 4px solid #6F6BE6; border-radius: 50%;
+                    animation: spin 1s linear infinite; margin: 0 auto 20px;
+                }
+                
+                .ai_scanner {
+                    width: 150px; height: 3px; background: #eee;
+                    margin: 0 auto 15px; position: relative; overflow: hidden;
+                }
+                .ai_scanner::after {
+                    content: ''; position: absolute; left: -50%; width: 50%; height: 100%;
+                    background: #6F6BE6; animation: scan 2s ease-in-out infinite;
+                }
+
+                .loading_text { font-size: 19px; font-weight: bold; color: #222; margin-bottom: 10px; }
+                .loading_subtext { font-size: 13px; color: #aaa; }
+
+                @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+                @keyframes scan { 0% { left: -50%; } 100% { left: 100%; } }
+
                 input, button { font-size: 16px !important; }
                 #eduwrap { -webkit-overflow-scrolling: touch; }
-                /* 문장 영역 폰트 조절 */
-                .boxtext.longtx div { margin-bottom: 10px; line-height: 1.6; }
             `}</style>
         </div>
     );
