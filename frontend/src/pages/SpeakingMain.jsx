@@ -18,10 +18,35 @@ const SpeakingMain = ({ step, itemArray, userId, taskId, branchCode, onFinish, o
     const audioChunksRef = useRef([]);
     const timerIntervalRef = useRef(null);
     const autoNextTimeoutRef = useRef(null);
+    const recordingStartTimeRef = useRef(0);
 
     const canvasRef = useRef(null);
     const audioCtxRef = useRef(null);
     const animationRef = useRef(null);
+
+    // --- [추가] 오디오 데시벨 분석 함수 (함수 외부에 두셔도 됩니다) ---
+    const getAverageDecibels = async (blob) => {
+        try {
+            const arrayBuffer = await blob.arrayBuffer();
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            const tempCtx = new AudioContext();
+            const audioBuffer = await tempCtx.decodeAudioData(arrayBuffer);
+            const rawData = audioBuffer.getChannelData(0); // 첫 번째 채널 사용
+            
+            let sumSquares = 0;
+            for (const amplitude of rawData) {
+                sumSquares += amplitude * amplitude;
+            }
+            const rms = Math.sqrt(sumSquares / rawData.length);
+            const db = rms > 0 ? 20 * Math.log10(rms) : -100;
+            
+            tempCtx.close();
+            return db;
+        } catch (e) {
+            console.error("데시벨 분석 실패:", e);
+            return -100; // 에러 발생 시 아주 낮은 값 반환
+        }
+    };
 
     // [고도화] 마이크 권한 실시간 모니터링
     const monitorMicPermission = async () => {
@@ -36,10 +61,11 @@ const SpeakingMain = ({ step, itemArray, userId, taskId, branchCode, onFinish, o
         }
     };
 
-    // [고도화] 마이크 에러 핸들러
+    // [최종 수정] 마이크 에러 핸들러: 쉐도잉(Step 1) 첫 문장으로 리셋
     const handleError = (errorName) => {
         setIsRecording(false);
-        let userMessage = "마이크 초기화에 실패했습니다. 다시 시도해 주세요.";
+        let userMessage = "마이크 초기화에 실패했습니다.";
+        
         switch (errorName) {
             case 'NotAllowedError':
             case 'PermissionDeniedError':
@@ -47,14 +73,25 @@ const SpeakingMain = ({ step, itemArray, userId, taskId, branchCode, onFinish, o
                 break;
             case 'NotReadableError':
             case 'TrackStartError':
-                userMessage = "마이크가 다른 프로그램(줌, 카톡 등)에서 사용 중입니다.";
+                userMessage = "마이크가 다른 프로그램에서 사용 중입니다.\n다른 앱을 종료하고 다시 시도해 주세요.";
                 break;
             default:
                 console.error("Recording Error:", errorName);
         }
-        alert(userMessage);
+
+        // 🚩 안내 후 쉐도잉 단계로 리셋
+        alert(`${userMessage}\n\n음성을 다시 듣고 마이크를 점검한 후 재시도해 주세요.`);
+        
+        // 타이머 및 자동 전환 정리
         if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
         if (autoNextTimeoutRef.current) clearTimeout(autoNextTimeoutRef.current);
+        if (animationRef.current) cancelAnimationFrame(animationRef.current);
+        
+        // 🚩 1단계(Shadowing)로 이동 및 인덱스/타이머 초기화
+        onStepChange(1);
+        setItemNo(0);
+        setTimerCnt(0);
+        setIsProcessing(false);
     };
 
     // --- [3] 초기화 및 데이터 세팅 ---
@@ -72,18 +109,39 @@ const SpeakingMain = ({ step, itemArray, userId, taskId, branchCode, onFinish, o
 
     // --- [4] 문장 관리 및 오디오 재생 (Shadowing) ---
     useEffect(() => {
-        if (!isProcessing && localItems[itemNo]) {
-            if (step === 1 && audioRef.current) {
-                audioRef.current.src = `https://admin.lucideducation.co.kr/uploadDir/study/mp3/${localItems[itemNo].study_mp3_file}`;
-                audioRef.current.play().catch(() => {});
-            }
+        // 데이터가 아직 준비되지 않았거나 분석 중이면 중단
+        if (localItems.length === 0 || isProcessing) return;
+
+        const currentItem = localItems[itemNo];
+        if (!currentItem) return;
+
+        // Step 1(Shadowing) 모드일 때만 음성 자동 재생
+        if (step === 1 && audioRef.current) {
+            console.log(`🔊 ${itemNo + 1}번 문장 재생 시작: ${currentItem.study_mp3_file}`);
+            
+            // 기존 재생 중인 오디오 정지 및 소스 교체
+            audioRef.current.pause();
+            audioRef.current.src = `https://admin.lucideducation.co.kr/uploadDir/study/mp3/${currentItem.study_mp3_file}`;
+            
+            // 브라우저 정책 대응: play()는 반드시 catch를 달아줘야 멈춤 현상을 방지합니다.
+            audioRef.current.play().catch(e => {
+                console.warn("오디오 자동 재생이 차단되었습니다. 사용자 상호작용이 필요합니다.", e);
+            });
+        }
+
+        // 스크롤 포커스 이동 (가독성을 위해 0.1초 딜레이)
+        setTimeout(() => {
             if (activeSentenceRef.current && scrollRef.current) {
                 const container = scrollRef.current;
                 const element = activeSentenceRef.current;
-                container.scrollTo({ top: element.offsetTop - container.offsetTop - 50, behavior: 'smooth' });
+                container.scrollTo({ 
+                    top: element.offsetTop - container.offsetTop - 50, 
+                    behavior: 'smooth' 
+                });
             }
-        }
-    }, [itemNo, step, localItems, isProcessing]);
+        }, 100);
+
+    }, [itemNo, step, localItems.length, isProcessing]);
 
     // --- [5] 비주얼라이저 (파형) ---
     const startVisualizer = (stream) => {
@@ -170,53 +228,104 @@ const SpeakingMain = ({ step, itemArray, userId, taskId, branchCode, onFinish, o
         }
     };
 
-    // --- [8] 녹음 제어 로직 ---
     const toggleRecording = async () => {
+        // AI 분석 중이면 중단
         if (isProcessing) return;
+
+        // 마이크 권한 차단 상태 체크
         if (micPermission === 'denied') {
-            alert("마이크 권한을 허용해 주세요.");
+            alert("마이크 권한이 차단되어 있습니다. 설정 변경 후 다시 시작해 주세요.");
+            onStepChange(1);
+            setItemNo(0);
             return;
         }
         
         if (!isRecording) {
+            // --- [녹음 시작 로직] ---
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 startVisualizer(stream);
+                
+                // 🚩 녹음 시작 시간 기록 (너무 짧은 녹음 방지용)
+                recordingStartTimeRef.current = Date.now();
+                
                 mediaRecorderRef.current = new MediaRecorder(stream);
                 audioChunksRef.current = [];
-                mediaRecorderRef.current.ondataavailable = (e) => audioChunksRef.current.push(e.data);
+
+                mediaRecorderRef.current.ondataavailable = (e) => {
+                    if (e.data.size > 0) audioChunksRef.current.push(e.data);
+                };
                 
                 mediaRecorderRef.current.onstop = async () => {
-                    const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-                    // 🚩 백엔드 전송 전 "최후의 방어선"
-                    if (blob.size < 2000) { // 파일이 너무 작으면 (거의 무음 수준)
-                      alert("음성이 감지되지 않았습니다. 조금 더 크게 말씀해 주세요!");
-                      setIsRecording(false);
-                      setIsProcessing(false);
-                      return; 
+                    // 🚩 [방어 로직] 녹음 버튼을 누른 지 0.8초가 안 지났다면 무효 처리
+                    const duration = Date.now() - recordingStartTimeRef.current;
+                    if (duration < 800) {
+                        console.warn("너무 짧은 녹음 시도 (무시됨)");
+                        // 상태만 초기화하고 리셋(쉐도잉 이동)은 하지 않음
+                        setIsRecording(false);
+                        setIsProcessing(false);
+                        if (animationRef.current) cancelAnimationFrame(animationRef.current);
+                        stream.getTracks().forEach(t => t.stop());
+                        return; 
                     }
+
+                    const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+                    
+                    // 1단계: 음성 데이터 유무 체크 (물리적 마이크 오류)
+                    if (blob.size < 2000) { 
+                        alert("음성이 감지되지 않았습니다.\n마이크 연결을 확인하고 다시 시작해 주세요.");
+                        onStepChange(1);
+                        setItemNo(0);
+                        return; 
+                    }
+
+                    setIsProcessing(true);
+                    const avgDb = await getAverageDecibels(blob);
+                    
+                    // 2단계: 소리 크기 체크 (데시벨 미달)
+                    if (avgDb < -45) {
+                        alert("마이크 소리가 너무 작습니다.\n볼륨 확인 후 다시 시작해 주세요.");
+                        onStepChange(1);
+                        setItemNo(0);
+                        return;
+                    }
+
+                    // 모든 검사 통과 시 AI 분석 서버 전송
                     await processBatchAnalysis(blob);
+
+                    // 스트림 및 비주얼라이저 종료
                     stream.getTracks().forEach(t => t.stop());
                     if (animationRef.current) cancelAnimationFrame(animationRef.current);
                 };
 
+                // 녹음 시작
                 mediaRecorderRef.current.start();
                 setIsRecording(true);
+                
+                // 타이머 및 자동 문장 전환 시작
                 setTimerCnt(0);
+                if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
                 timerIntervalRef.current = setInterval(() => setTimerCnt(v => v + 1), 1000);
+                
                 startAutoSentenceSwitch(0); 
 
             } catch (err) {
+                // 마이크 접근 실패 시 에러 핸들러 호출
                 handleError(err.name);
             }
         } else {
-            if (mediaRecorderRef.current) mediaRecorderRef.current.stop();
+            // --- [녹음 정지 로직] ---
+            if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+                mediaRecorderRef.current.stop();
+            }
             setIsRecording(false);
-            clearInterval(timerIntervalRef.current);
-            clearTimeout(autoNextTimeoutRef.current);
+            
+            // 타이머 및 타임아웃 정리
+            if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+            if (autoNextTimeoutRef.current) clearTimeout(autoNextTimeoutRef.current);
         }
     };
-
+    
     return (
         <div className="educontainer">
             <audio ref={audioRef} onEnded={() => step === 1 && itemNo + 1 < localItems.length && setItemNo(prev => prev + 1)} />

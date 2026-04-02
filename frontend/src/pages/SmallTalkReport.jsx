@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 
-const SmallTalkReport = ({ summary, logs, userName, onClose }) => {
+const SmallTalkReport = ({ summary, logs, userName, onClose, onRetry }) => {
     const [isPlayingTTS, setIsPlayingTTS] = useState(false);
 
     // [고도화] 불필요한 멘트 및 유튜브/광고성 멘트 삭제 필터링 함수
@@ -110,6 +110,17 @@ const SmallTalkReport = ({ summary, logs, userName, onClose }) => {
                     boxShadow: '0 8px 20px rgba(255,107,107,0.3)', transition: '0.3s' 
                 }}>
                     {isPlayingTTS ? "루아이가 말하는 중... 🎤" : "루아이 목소리로 듣기 🔊"}
+                </button>
+                {/* 2. [추가] 다시 학습하기 버튼 (RETRY) */}
+                <button onClick={onRetry} style={{ 
+                    padding: '14px 25px', background: '#fff', color: '#ff6b6b', border: '2px solid #ff6b6b', 
+                    borderRadius: '50px', cursor: 'pointer', fontWeight: 'bold',
+                    transition: '0.3s'
+                }}
+                onMouseOver={(e) => e.target.style.background = '#fff0f0'}
+                onMouseOut={(e) => e.target.style.background = '#fff'}
+                >
+                    한 번 더 대화하기 🔄
                 </button>
                 <button onClick={onClose} style={{ 
                     padding: '14px 30px', background: '#555', color: '#fff', border: 'none', 
