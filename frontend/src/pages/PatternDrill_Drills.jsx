@@ -15,6 +15,7 @@ const PatternDrill_Drills = ({ contents, onComplete, task_id, user_id, branch_co
     const streamRef = useRef(null);
     const audioChunks = useRef([]);
     const recordingTimerRef = useRef(null); // [디버깅] 20초 타이머용 Ref 추가
+    const audioBlobsRef = useRef([]); // 🚩 문항별 녹음 파일을 담을 배열
     const currentItem = contents[itemNo];
 
     useEffect(() => {
@@ -24,6 +25,9 @@ const PatternDrill_Drills = ({ contents, onComplete, task_id, user_id, branch_co
             if (recordingTimerRef.current) clearTimeout(recordingTimerRef.current);
         };
     }, []);
+
+    // 비교를 위한 텍스트 정규화 함수
+    const normalizeText = (text) => text.toLowerCase().replace(/[^a-zA-Z0-9]/g, "").trim();
 
     // --- [추가] 자원 정리 함수 ---
     const stopStream = () => {
@@ -130,36 +134,38 @@ const PatternDrill_Drills = ({ contents, onComplete, task_id, user_id, branch_co
             mediaRecorderRef.current.ondataavailable = (e) => audioChunks.current.push(e.data);
             
             mediaRecorderRef.current.onstop = async () => {
-                if (recordingTimerRef.current) {
-                    clearTimeout(recordingTimerRef.current);
-                    recordingTimerRef.current = null;
-                }
+              if (recordingTimerRef.current) {
+              clearTimeout(recordingTimerRef.current);
+                recordingTimerRef.current = null;
+               }
 
-                const blob = new Blob(audioChunks.current, { type: 'audio/wav' });
+              // 1. 현재까지의 조각(Chunks)으로 Blob 생성
+             const blob = new Blob(audioChunks.current, { type: 'audio/webm' });
+    
+            // 🚩 중요: 다음 녹음을 위해 데이터 조각 배열을 즉시 초기화
+            audioChunks.current = []; 
 
-                // 🚩 [최후의 방어선 1] 파일 용량 체크
-                if (blob.size < 2000) { 
-                 handleRetry("음성 입력이 감지되지 않았습니다. 마이크 연결을 확인하고 다시 시도해 주세요.");
-                 return; 
-                }
+            // 2. 최후의 방어선 (용량 체크)
+           if (blob.size < 2000) { 
+              handleRetry("음성 입력이 너무 짧습니다. 다시 시도해 주세요.");
+              return; 
+             }
 
-                // 🚩 [최후의 방어선 2] 데시벨 분석 체크 (노이즈 방어)
-                setPlayStatus("PROCESSING");
-                const avgDb = await getAverageDecibels(blob);
-                console.log(`🎤 패턴드릴 음량 분석: ${avgDb.toFixed(2)} dB`);
+    setPlayStatus("PROCESSING");
+    const avgDb = await getAverageDecibels(blob);
+    console.log(`🎤 문항 ${itemNo + 1} 음량: ${avgDb.toFixed(2)} dB`);
 
-                // -45dB 미만 시 하드웨어 이슈로 판단하고 종료
-                if (avgDb < -45) {
-                    handleRetry("마이크 소리가 너무 작거나 노이즈만 들립니다.\n다시 시도해 주세요.");
-                    return;
-                }
+    if (avgDb < -45) {
+        handleRetry("소리가 너무 작습니다. 다시 시도해 주세요.");
+        return;
+    }
 
-                // 스트림 종료 및 분석 시작
-                if (streamRef.current) {
-                    streamRef.current.getTracks().forEach(track => track.stop());
-                }
-                handleAnalyze(blob); // 분석 함수로 전달 (handleAnalyze 내부 로직도 일부 수정 필요)
-            };
+              // 🚩 중요: 다음 문항에서 마이크를 새로 잡을 수 있도록 현재 스트림을 완전히 종료
+                stopStream(); 
+
+              // 3. 바구니에 담으러 가기
+                handleAnalyze(blob); 
+          };
 
             mediaRecorderRef.current.start();
             setIsRecording(true);
@@ -175,79 +181,58 @@ const PatternDrill_Drills = ({ contents, onComplete, task_id, user_id, branch_co
         }
     };
 
-    const handleAnalyze = async (audioBlob) => {
-        // 1. 상태를 분석 중으로 변경 (UI 피드백)
-        setPlayStatus("PROCESSING");
-        setIsProcessing(true);
+ // PatternDrill_Drills.jsx 내부의 handleAnalyze 함수 교체
+const handleAnalyze = async (audioBlob) => {
+    setIsProcessing(true);
+    setPlayStatus("PROCESSING");
 
-        /**
-         * [핵심] FormData 구성
-         * 백엔드 FastAPI 파라미터명: audio_file, task_id, study_item_no, user_id, branch_code
-         */
-        const formData = new FormData();
+    const formData = new FormData();
+    formData.append("task_id", String(task_id));
+    formData.append("user_code", String(user_id));
+    formData.append("branch_code", String(branch_code || "MAIN")); 
+    formData.append("question_text", currentItem.study_eng); 
+    formData.append("study_item_no", String(currentItem.study_item_no));
+    formData.append("audio_file", audioBlob, "unit.webm");
+
+    try {
+        // 🚩 서버에 한 문장씩 즉시 분석 요청
+        const res = await axios.post('/api/patterndrill/analyze-single', formData);
         
-        // Whisper AI 분석을 위해 파일을 student_recording.wav 이름으로 첨부
-        formData.append('audio_file', audioBlob, 'student_recording.wav'); 
-        formData.append('task_id', String(task_id)); // 문자열 변환으로 안정성 확보
-        formData.append('study_item_no', String(currentItem.study_item_no));
-        formData.append('user_id', String(user_id));
-        formData.append('branch_code', String(branch_code));
+        if (res.data.status === "success") {
+            const studentText = res.data.transcribed || "";
+            
+            // 현재 문항 결과 생성
+            const newLog = {
+                study_item_no: currentItem.study_item_no,
+                question_text: currentItem.study_eng,
+                student_transcript: studentText,
+                // 정규화 비교를 통해 일치 여부 판정
+                is_speaking_correct: normalizeText(currentItem.study_eng) === normalizeText(studentText),
+                unscramble_input: "",
+                is_unscramble_correct: false
+            };
 
-        try {
-            // 2. API 호출 (multipart/form-data)
-            const res = await axios.post('/api/patterndrill/analyze-speaking', formData, {
-                headers: { 'Content-Type': 'multipart/form-data' }
-            });
+            const updatedLogs = [...currentLogs, newLog];
+            setCurrentLogs(updatedLogs);
 
-            if (res.data.result_code === "200") {
-                // 3. 분석 결과 로그 객체 생성
-                const newLog = {
-                    study_item_no: currentItem.study_item_no,
-                    question_text: currentItem.study_eng,
-                    student_transcript: res.data.transcript || "", // AI가 받아쓴 텍스트
-                    is_speaking_correct: true, // 패턴드릴 스피킹은 발화 성공 시 기본 true
-                    unscramble_input: "",      // 드릴 단계이므로 빈값
-                    is_unscramble_correct: false
-                };
-
-                // 4. 기존 로그 배열에 추가
-                const updatedLogs = [...currentLogs, newLog];
-                setCurrentLogs(updatedLogs);
-
-                // 5. 다음 단계 결정 (마지막 문항 여부 체크)
-                if (itemNo + 1 < contents.length) {
-                    // 다음 문항으로 이동 -> useEffect가 감지하여 playAudio 실행
-                    setItemNo(prev => prev + 1);
-                } else {
-                    // 모든 드릴 완료 -> 부모 컴포넌트의 완료 핸들러 호출
-                    if (onComplete) {
-                        onComplete(updatedLogs);
-                    }
-                }
-            } else {
-                // 서버 내부 에러 처리 (예: API는 성공했으나 분석 결과가 없음)
-                console.error("서버 분석 오류:", res.data);
-                alert("분석 실패: " + (res.data.error || "데이터를 처리할 수 없습니다."));
+            // 다음 문항으로 이동하거나 종료
+            if (itemNo + 1 < contents.length) {
+                setItemNo(prev => prev + 1);
                 setPlayStatus("READY");
+            } else {
+                // 마지막 문항이면 부모(PatternDrill.jsx)에게 최종 로그 전달
+                onComplete(updatedLogs);
             }
-
-        } catch (err) {
-            // 6. 통신 에러 및 422 유효성 에러 디버깅
-            console.error("❌ API 호출 에러 상세:", err.response?.data);
-            
-            // 422 에러인 경우 백엔드가 요구하는 파라미터가 누락되었을 확률이 높음
-            const errorDetail = err.response?.data?.detail;
-            const errorMsg = typeof errorDetail === 'string' ? errorDetail : "분석 중 통신 오류가 발생했습니다.";
-            
-            alert(errorMsg);
-            setPlayStatus("READY"); // 다시 시도할 수 있도록 상태 복구
-        } finally {
-            // 7. 처리 상태 해제
-            setIsProcessing(false);
-            setIsRecording(false);
         }
-    };
-
+    } catch (err) {
+        console.error("❌ 분석 실패:", err);
+        alert("문장 분석 중 오류가 발생했습니다. 다시 시도해 주세요.");
+        setPlayStatus("READY");
+    } finally {
+        setIsProcessing(false);
+        setIsRecording(false);
+    }
+};
     return (
         <div id="agent-content" className="educontainer">
             <div className="conbox1">

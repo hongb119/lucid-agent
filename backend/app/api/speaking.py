@@ -177,6 +177,8 @@ async def generate_final_summary(payload: SummaryRequest):
             "3. 구체적으로 잘한 단어나 발음이 있다면 칭찬하고, 개선점을 3문장 이내로 격려 섞어 작성해줘."
             "4. 특수문자나 이모지등 문자외의 특수문자는 쓰지말아줘."
             "5. 쌍따옴표나 어떤기호도 쓰지말아줘 읽는게 어색해지니깐"
+            "6. 1,2,3처럼 표기하지말고 one,two,three처럼 표기해줘요."
+            "7. 문장에 있는 콤마나 특수문자는 안 읽어도 되니깐 첨삭에 넣지 말아줘요."
         )
         
         response = client.chat.completions.create(

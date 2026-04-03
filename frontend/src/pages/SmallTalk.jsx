@@ -120,6 +120,7 @@ const SmallTalk = () => {
 
         // 🚩 [수정] 종료 대신 알림 후 첫 문항으로 리셋
         alert(`${userMessage}\n\n마이크 설정 확인 후 처음부터 다시 학습을 시작합니다.`);
+        //handleRetry();
         window.location.reload();
         //resetToStart();
     };
@@ -308,37 +309,26 @@ const SmallTalk = () => {
             mediaRecorderRef.current.onstop = async () => {
                 const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
                 
-                // 🚩 1단계: 파일 용량 체크 시 리셋
+                // 1단계: 용량/데시벨 체크
                 if (blob.size < 2000) { 
-                    alert("음성이 감지되지 않았습니다. 마이크를 점검하고 다시 시작합니다.");
+                    alert("음성이 감지되지 않았습니다. 다시 시작합니다.");
                     resetToStart();
                     return; 
                 }
 
                 setStatus('PROCESSING');
                 const avgDb = await getAverageDecibels(blob);
-
-                // 🚩 2단계: 데시벨 미달 시 리셋
                 if (avgDb < -45) {
-                    alert("마이크 소리가 너무 작습니다. 설정 확인 후 다시 시작합니다.");
+                    alert("소리가 너무 작습니다. 설정 확인 후 다시 시작합니다.");
                     resetToStart();
                     return;
                 }
 
-                const currentItem = contents[itemNoRef.current];
-                const formData = new FormData();
-                formData.append('audio_file', blob);
-                formData.append('correct_eng', currentItem.correct_eng || "");
-                
-                try {
-                    const res = await axios.post('/api/smalltalk/analyze', formData);
-                    recordLogAndProceed(res.data.transcribed, res.data.is_correct, currentLogs);
-                } catch (err) { 
-                    console.error("Analysis Error:", err);
-                    recordLogAndProceed("(Error)", false, currentLogs); 
-                } finally {
-                    stream.getTracks().forEach(t => t.stop());
-                }
+                // 🚩 분리된 분석 함수 호출
+                handleAnalyze(blob, currentLogs);
+
+                // 스트림 종료
+                stream.getTracks().forEach(t => t.stop());
             };
 
             mediaRecorderRef.current.start();
@@ -347,6 +337,29 @@ const SmallTalk = () => {
 
         } catch (err) {
             handleError(err.name); 
+        }
+    };
+
+    // 🚩 [새로 추가] 스몰토크 전용 분석 함수
+    const handleAnalyze = async (audioBlob, currentLogs) => {
+        const currentItem = contents[itemNoRef.current];
+        
+        const formData = new FormData();
+        // 병천 님이 말씀하신 폴더 생성을 위한 필수 데이터 전송
+        formData.append('task_id', String(taskId));
+        formData.append('user_id', String(userId));
+        formData.append('ai_no', String(currentItem.ai_no)); // 문항 번호
+        formData.append('audio_file', audioBlob, "talk.webm");
+        formData.append('correct_eng', currentItem.correct_eng || "");
+        formData.append('correct_except', currentItem.correct_except || "");
+
+        try {
+            const res = await axios.post('/api/smalltalk/analyze', formData);
+            // 분석 결과를 로그에 기록하고 다음으로 진행
+            recordLogAndProceed(res.data.transcribed, res.data.is_correct, currentLogs);
+        } catch (err) {
+            console.error("Analysis Error:", err);
+            recordLogAndProceed("(Error)", false, currentLogs);
         }
     };
 
@@ -373,22 +386,44 @@ const SmallTalk = () => {
         setTimeout(() => playAISequence(nextIdx, updatedLogs), 500);
     };
 
-    const finishStudy = async (finalLogs) => {
-        if (status === 'FINAL_SAVING') return;
-        setStatus('FINAL_SAVING');
-        try {
-            const res = await axios.post('/api/smalltalk/complete', {
-                task_id: taskId, user_id: userId, branch_code: branchCode,
-                re_study: reStudy, re_study_no: parseInt(reStudyNo) + 1,
-                logs: (finalLogs && finalLogs.length > 0) ? finalLogs : logs
-            });
-            if (res.data) {
-                setAiSummary(res.data.summary);
-                if (window.opener?.fnReload) window.opener.fnReload();
-                setMode('RESULT');
-            }
-        } catch (err) { setMode('RESULT'); }
-    };
+    // SmallTalk.jsx 내의 학습 종료 로직
+ const finishStudy = async (finalLogs) => {
+    if (status === 'FINAL_SAVING') return;
+    setStatus('FINAL_SAVING'); // "정리 중이에요..." 메시지 표시
+
+    try {
+        // 1️⃣ [GPT 총평 호출] 
+        // 지금까지 쌓인 logs(일문일답 전체)를 백엔드로 보냅니다.
+        const summaryResponse = await axios.post('/api/smalltalk/generate-smalltalk-summary', {
+            results: finalLogs.map(log => ({
+                study_eng: log.question_text,      // AI의 질문
+                transcribed: log.student_transcript // 학생의 답변
+            }))
+        });
+
+        const gptSummary = summaryResponse.data.summary;
+
+        // 2️⃣ [최종 결과 저장 호출]
+        // GPT가 준 총평(gptSummary)을 포함해서 DB에 최종 저장합니다.
+        const completeRes = await axios.post('/api/smalltalk/complete', {
+            task_id: taskId,
+            user_id: userId,
+            branch_code: branchCode,
+            re_study: reStudy,
+            re_study_no: parseInt(reStudyNo) + 1,
+            logs: finalLogs,
+            ai_summary: gptSummary // 🚩 DB에 총평 저장
+        });
+
+        if (completeRes.data) {
+            setAiSummary(gptSummary); // 리포트 컴포넌트에 전달할 상태 업데이트
+            setMode('RESULT');        // 리포트 화면으로 전환
+        }
+    } catch (err) {
+        console.error("최종 처리 실패:", err);
+        setMode('RESULT'); // 에러가 나더라도 화면은 보여줌
+    }
+ };
 
     if (loading) return <div className="loading_box">학습 로드 중...</div>;
     if (!taskInfo) return null;

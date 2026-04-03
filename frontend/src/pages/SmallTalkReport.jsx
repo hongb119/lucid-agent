@@ -4,25 +4,20 @@ import axios from 'axios';
 const SmallTalkReport = ({ summary, logs, userName, onClose, onRetry }) => {
     const [isPlayingTTS, setIsPlayingTTS] = useState(false);
 
-    // [고도화] 불필요한 멘트 및 유튜브/광고성 멘트 삭제 필터링 함수
     const cleanSummary = (text) => {
         if (!text) return "";
         const forbiddenWords = [
-            /구독과?\s?좋아요/g,
-            /알림\s?설정/g,
-            /채널\s?방문/g,
-            /영상\s?시청해주셔서/g,
-            /다음\s?영상에서/g,
-            /수고하셨습니다/g,
-            /숙제\s?일부\s?완료/g // 요청하신 딱딱한 멘트 제거
+            /구독과?\s?좋아요/g, /알림\s?설정/g, /채널\s?방문/g,
+            /영상\s?시청해주셔서/g, /다음\s?영상에서/g, /수고하셨습니다/g,
+            /숙제\s?일부\s?완료/g 
         ];
-        
         let filteredText = text;
         forbiddenWords.forEach(pattern => {
             filteredText = filteredText.replace(pattern, "");
         });
-        
-        return filteredText.trim();
+
+        // 🚩 [추가] GPT 특유의 마크업 기호(*, ") 제거하여 TTS를 더 자연스럽게 만듭니다.
+        return filteredText.replace(/[\*\"]/g, "").trim();
     };
 
     const filteredSummary = cleanSummary(summary);
@@ -45,26 +40,28 @@ const SmallTalkReport = ({ summary, logs, userName, onClose, onRetry }) => {
     return (
         <div className="boxline boxlong_w" style={{ padding: '25px', background: '#fff', borderRadius: '30px', boxShadow: '0 15px 40px rgba(0,0,0,0.08)', border: '1px solid #f0f0f0' }}>
             <div style={{ textAlign: 'center', marginBottom: '25px' }}>
-                {/* 헤더 부분 다정한 문구로 변경 */}
                 <h2 style={{ color: '#ff6b6b', fontSize: '24px', marginBottom: '8px', fontWeight: 'bold' }}>RUAI's Talking Report</h2>
                 <p style={{ color: '#666', fontSize: '15px' }}>
                     <b>{userName}</b> 학생! 루아이와 즐겁게 대화했나요? 😊
                 </p>
                 
-                {/* 다정한 요약 리포트 영역 */}
                 <div style={{ 
                     background: '#fff9f9', 
-                    padding: '20px', 
+                    padding: '25px', 
                     borderRadius: '20px', 
                     border: '2px dashed #ffc9c9', 
                     marginTop: '20px',
-                    position: 'relative'
+                    position: 'relative',
+                    minHeight: '80px',
+                    display: 'flex',
+                    alignItems: 'center'
                 }}>
-                    {/* 에이전트 아이콘 살짝 노출 */}
-                    <img src="/static/study/images/icon01.png" alt="AI" style={{ width: '40px', position: 'absolute', top: '-20px', left: '20px' }} />
+                    <img src="/static/study/images/icon01.png" alt="AI" style={{ width: '45px', position: 'absolute', top: '-22px', left: '20px' }} />
                     
-                    <p style={{ lineHeight: '1.8', fontSize: '16px', color: '#444', whiteSpace: 'pre-line', textAlign: 'left', margin: 0 }}>
-                        {filteredSummary || (
+                    <p style={{ lineHeight: '1.8', fontSize: '16px', color: '#444', whiteSpace: 'pre-line', textAlign: 'left', margin: 0, width: '100%' }}>
+                        {filteredSummary ? (
+                            filteredSummary
+                        ) : (
                             <span style={{ color: '#ff8e8e', fontWeight: '500' }}>
                                 ✨ 루아이가 우리의 대화 내용을 예쁘게 정리하고 있어요! 잠시만 기다려줄래?
                             </span>
@@ -77,56 +74,52 @@ const SmallTalkReport = ({ summary, logs, userName, onClose, onRetry }) => {
             <div style={{ maxHeight: '350px', overflowY: 'auto', textAlign: 'left', padding: '15px', background: '#fcfcfc', borderRadius: '20px', border: '1px solid #f0f0f0' }}>
                 <h4 style={{ marginBottom: '15px', color: '#888', fontSize: '13px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px' }}>
                     <span style={{ width: '4px', height: '14px', background: '#ff6b6b', borderRadius: '2px' }}></span>
-                    우리가 나눈 대화 기록
+                    오늘 내가 말한 문장들
                 </h4>
-                {logs && logs.map((log, index) => (
-                    <div key={index} style={{ marginBottom: '15px', padding: '15px', background: '#fff', borderRadius: '15px', border: '1px solid #f0f0f0' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                            <span style={{ fontSize: '11px', color: '#ff6b6b', background: '#fff0f0', padding: '2px 10px', borderRadius: '10px', fontWeight: 'bold' }}>
-                                대화 {index + 1}
-                            </span>
+                {logs && logs.length > 0 ? (
+                    logs.map((log, index) => (
+                        <div key={index} style={{ marginBottom: '12px', padding: '15px', background: '#fff', borderRadius: '15px', border: '1px solid #f0f0f0', boxShadow: '0 2px 5px rgba(0,0,0,0.02)' }}>
+                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+                                <span style={{ fontSize: '11px', color: '#ff6b6b', background: '#fff0f0', padding: '2px 8px', borderRadius: '8px', fontWeight: 'bold', minWidth: '35px', textAlign: 'center', marginTop: '3px' }}>
+                                    #{index + 1}
+                                </span>
+                                <p style={{ fontSize: '15px', color: '#444', fontWeight: '500', margin: 0, lineHeight: '1.4' }}>
+                                    "{log.student_transcript || "(대답을 듣지 못했어요 😢)"}"
+                                </p>
+                            </div>
                         </div>
-                        
-                        <div style={{ marginBottom: '8px' }}>
-                            <p style={{ fontSize: '14px', color: '#2c3e50', fontWeight: '500' }}>
-                                🤖 루아이: "{log.question_text}"
-                            </p>
-                        </div>
-
-                        <div>
-                            <p style={{ fontSize: '14px', color: '#ff6b6b', fontWeight: '600' }}>
-                                👤 {userName}: "{log.student_transcript || "(아쉽게도 대답을 듣지 못했어요 😢)"}"
-                            </p>
-                        </div>
-                    </div>
-                ))}
+                    ))
+                ) : (
+                    <p style={{ textAlign: 'center', color: '#999', padding: '20px' }}>대화 기록이 없어요.</p>
+                )}
             </div>
 
             {/* 하단 버튼 영역 */}
-            <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', marginTop: '30px' }}>
-                <button onClick={playSummaryTTS} style={{ 
-                    padding: '14px 30px', background: '#ff6b6b', color: '#fff', border: 'none', 
-                    borderRadius: '50px', cursor: 'pointer', fontWeight: 'bold', 
-                    boxShadow: '0 8px 20px rgba(255,107,107,0.3)', transition: '0.3s' 
-                }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '12px', marginTop: '30px' }}>
+                {/* 🚩 [수정] summary가 없을 때는 버튼을 비활성화하고 색상을 흐리게 바꿉니다. */}
+                <button 
+                    onClick={playSummaryTTS} 
+                    disabled={!filteredSummary || isPlayingTTS}
+                    style={{ 
+                        padding: '14px 25px', 
+                        background: (filteredSummary && !isPlayingTTS) ? '#ff6b6b' : '#ccc', 
+                        color: '#fff', 
+                        border: 'none', 
+                        borderRadius: '50px', 
+                        cursor: (filteredSummary && !isPlayingTTS) ? 'pointer' : 'default', 
+                        fontWeight: 'bold', 
+                        boxShadow: (filteredSummary && !isPlayingTTS) ? '0 8px 20px rgba(255,107,107,0.3)' : 'none', 
+                        flex: '1 1 auto', 
+                        minWidth: '200px'
+                    }}
+                >
                     {isPlayingTTS ? "루아이가 말하는 중... 🎤" : "루아이 목소리로 듣기 🔊"}
                 </button>
-                {/* 2. [추가] 다시 학습하기 버튼 (RETRY) */}
-                <button onClick={onRetry} style={{ 
-                    padding: '14px 25px', background: '#fff', color: '#ff6b6b', border: '2px solid #ff6b6b', 
-                    borderRadius: '50px', cursor: 'pointer', fontWeight: 'bold',
-                    transition: '0.3s'
-                }}
-                onMouseOver={(e) => e.target.style.background = '#fff0f0'}
-                onMouseOut={(e) => e.target.style.background = '#fff'}
-                >
+                <button onClick={onRetry} style={{ padding: '14px 20px', background: '#fff', color: '#ff6b6b', border: '2px solid #ff6b6b', borderRadius: '50px', cursor: 'pointer', fontWeight: 'bold', flex: '1 1 auto' }}>
                     한 번 더 대화하기 🔄
                 </button>
-                <button onClick={onClose} style={{ 
-                    padding: '14px 30px', background: '#555', color: '#fff', border: 'none', 
-                    borderRadius: '50px', cursor: 'pointer', fontWeight: 'bold' 
-                }}>
-                    오늘 학습 마칠게요
+                <button onClick={onClose} style={{ padding: '14px 20px', background: '#555', color: '#fff', border: 'none', borderRadius: '50px', cursor: 'pointer', fontWeight: 'bold', flex: '1 1 auto' }}>
+                    학습 마칠게요
                 </button>
             </div>
         </div>

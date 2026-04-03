@@ -15,7 +15,7 @@ const PatternDrill_SpeakingReport = ({ logs, stats, onNext }) => {
         <div className="result_page" style={{ padding: '20px', maxWidth: '800px', margin: '0 auto' }}>
             <div className="boxline" style={{ background: '#fff', padding: '30px', borderRadius: '30px', boxShadow: '0 10px 25px rgba(0,0,0,0.1)' }}>
                 
-                {/* [1] 에이전트 격려 영역 (말풍선 스타일) */}
+                {/* [1] 에이전트 격려 영역 */}
                 <div className="speech" style={{ marginBottom: '30px', display: 'flex', alignItems: 'flex-start', gap: '15px' }}>
                     <img src="/static/study/images/icon01.png" alt="AI" style={{ width: '50px', height: '50px' }} />
                     <div style={{ 
@@ -36,16 +36,12 @@ const PatternDrill_SpeakingReport = ({ logs, stats, onNext }) => {
                     Speaking Analysis Details
                 </h2>
                 
-                {/* [2] 상세 분석 내역 (통계 섹션 삭제 후 바로 노출) */}
+                {/* [2] 상세 분석 내역 */}
                 <div style={{ maxHeight: '400px', overflowY: 'auto', background: '#fbfcfd', padding: '20px', borderRadius: '20px', border: '1px solid #eee' }}>
                     {logs.map((log, idx) => (
                         <div key={idx} style={{ marginBottom: '20px', paddingBottom: '15px', borderBottom: '1px solid #f0f0f0' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
                                 <span style={{ fontSize: '12px', background: '#eee', padding: '2px 8px', borderRadius: '4px', color: '#666' }}>Q{idx + 1}</span>
-                                {log.is_speaking_correct ? 
-                                    <span style={{ fontSize: '11px', color: '#52c41a', fontWeight: 'bold' }}>● 정밀 일치</span> : 
-                                    <span style={{ fontSize: '11px', color: '#faad14', fontWeight: 'bold' }}>● 발음 확인 필요</span>
-                                }
                             </div>
                             
                             {/* 정답 문장 */}
@@ -53,13 +49,13 @@ const PatternDrill_SpeakingReport = ({ logs, stats, onNext }) => {
                                 <span style={{ color: '#aaa', marginRight: '5px' }}>Target:</span> {log.question_text}
                             </p>
                             
-                            {/* 학생이 말한 내용 */}
+                            {/* 학생이 말한 내용 (색상 통일 수정) */}
                             <p style={{ 
                                 fontSize: '14px', 
-                                color: log.is_speaking_correct ? '#52c41a' : '#faad14', 
+                                color: '#6f6be6', // 🚩 정답 여부와 상관없이 보라색 계열로 통일
                                 margin: '3px 0',
                                 paddingLeft: '10px',
-                                borderLeft: `3px solid ${log.is_speaking_correct ? '#52c41a' : '#faad14'}`,
+                                borderLeft: `3px solid #6f6be6`, // 🚩 왼쪽 라인 색상도 통일
                                 fontStyle: 'italic'
                             }}>
                                 <span style={{ color: '#999', fontSize: '12px', marginRight: '5px', fontStyle: 'normal' }}>You said:</span>

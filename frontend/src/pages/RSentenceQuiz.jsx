@@ -98,44 +98,49 @@ const RSentenceQuiz = ({ items, onLog, onComplete }) => {
         setIsProcessing(false);
     };
 
-    // 하단 글자 클릭 (fnPatterBtnTop 역할)
     const handleWordClick = (char, bottomIdx) => {
-        if (isProcessing || nextBlankNo >= totalBlankNo || !char) return;
+    if (isProcessing || !char) return;
 
-        const updatedTop = [...topList];
-        const targetIdx = updatedTop.findIndex(t => t.type === 'blank' && t.id === nextBlankNo);
+    const updatedTop = [...topList];
+       // 🚩 핵심: 'blank' 타입이면서 값이 비어있는 첫 번째 요소를 찾습니다.
+       const targetIdx = updatedTop.findIndex(t => t.type === 'blank' && t.val === '');
+    
+      if (targetIdx !== -1) {
+        updatedTop[targetIdx].val = char;
+        updatedTop[targetIdx].key = bottomIdx;
+        setTopList(updatedTop);
         
-        if (targetIdx !== -1) {
-            updatedTop[targetIdx].val = char;
-            updatedTop[targetIdx].key = bottomIdx;
-            setTopList(updatedTop);
-            
-            const updatedBottom = [...bottomList];
-            updatedBottom[bottomIdx] = null; // 사용한 글자 숨김
-            setBottomList(updatedBottom);
-            setNextBlankNo(prev => prev + 1);
-        }
-    };
+        const updatedBottom = [...bottomList];
+        updatedBottom[bottomIdx] = null;
+        setBottomList(updatedBottom);
+
+        // 🚩 nextBlankNo를 수동으로 계산 (혹시 모르니 유지하되, 전체 개수와 비교용으로만 사용)
+        const nextEmpty = updatedTop.findIndex(t => t.type === 'blank' && t.val === '');
+        setNextBlankNo(nextEmpty === -1 ? totalBlankNo : nextEmpty);
+      }
+   };
 
     // 상단 글자 클릭 취소 (fnPatterClear 역할)
     const handleClear = (id) => {
         if (isProcessing) return;
-        const targetIdx = topList.findIndex(t => t.type === 'blank' && t.id === id);
-        if (targetIdx === -1 || !topList[targetIdx].val) return;
+    
+       const targetIdx = topList.findIndex(t => t.type === 'blank' && t.id === id);
+       if (targetIdx === -1 || !topList[targetIdx].val) return;
 
-        const item = topList[targetIdx];
-        const updatedBottom = [...bottomList];
-        updatedBottom[item.key] = item.val; // 하단에 글자 복구
-        setBottomList(updatedBottom);
+       const item = topList[targetIdx];
+       const updatedBottom = [...bottomList];
+       updatedBottom[item.key] = item.val; 
+       setBottomList(updatedBottom);
 
-        const updatedTop = [...topList];
-        updatedTop[targetIdx].val = '';
-        updatedTop[targetIdx].key = null;
-        setTopList(updatedTop);
-        
-        // 지운 칸 이후로 다시 채우도록 순서 조정
-        if (id < nextBlankNo) setNextBlankNo(id);
-    };
+      const updatedTop = [...topList];
+      updatedTop[targetIdx].val = '';
+      updatedTop[targetIdx].key = null;
+      setTopList(updatedTop);
+    
+       // 🚩 지운 후 가장 빠른 빈칸 번호를 다시 업데이트
+      const nextEmpty = updatedTop.findIndex(t => t.type === 'blank' && t.val === '');
+      setNextBlankNo(nextEmpty === -1 ? totalBlankNo : nextEmpty);
+     };
 
     const startTimer = () => {
         setTimer(0);
@@ -145,6 +150,14 @@ const RSentenceQuiz = ({ items, onLog, onComplete }) => {
 
     const handleCheck = () => {
         if (isProcessing) return;
+        // 🚩 'blank' 타입인 모든 칸이 채워졌는지 직접 확인
+       const blanks = topList.filter(t => t.type === 'blank');
+       const isAllFilled = blanks.every(b => b.val !== '');
+       
+         if (!isAllFilled) {
+           alert("옮겨지지 않은 단어가 있습니다.");
+           return;
+        }
         if (topList.some(t => t.type === 'blank' && !t.val)) {
             alert("옮겨지지 않은 단어가 있습니다.");
             return;

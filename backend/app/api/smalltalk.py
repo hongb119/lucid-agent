@@ -47,6 +47,13 @@ class FinalCompleteRequest(BaseModel):
     re_study_no: int
     logs: List[SmallTalkLog]
 
+class SentenceResult(BaseModel):
+    study_eng: str
+    transcribed: str
+
+class SummaryRequest(BaseModel):
+    results: List[SentenceResult]
+    
 
 # 1. 정보 조회
 @router.get("/info")
@@ -88,31 +95,44 @@ async def get_smalltalk_info(task_id: int, user_id: str, db = Depends(get_db)):
         cursor.close()
 
 # 2. 음성 분석
+# 2. 음성 분석 (디렉토리 구조화 적용 버전)
 @router.post("/analyze")
 async def analyze_smalltalk(
+    task_id: str = Form(...),        # 🚩 추가
+    user_id: str = Form(...),        # 🚩 추가
+    ai_no: str = Form(...),          # 🚩 추가 (몇 번째 대화인지)
     audio_file: UploadFile = File(...),
     correct_eng: Optional[str] = Form(""), 
     correct_except: Optional[str] = Form(""),
     db = Depends(get_db)
 ):
-    temp_filename = f"{uuid.uuid4()}.wav"
-    temp_path = UPLOAD_DIR / temp_filename
-
     try:
-        with open(temp_path, "wb") as buffer:
+        # [1] 디렉토리 규칙 설정: uploads/smalltalk/taskID_userID
+        folder_name = f"{task_id}_{user_id}"
+        target_dir = UPLOAD_DIR / folder_name
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        # [2] 파일명 규칙 설정: aiNo_시간.webm (또는 wav)
+        timestamp = datetime.now().strftime("%H%M%S")
+        file_name = f"{ai_no}_{timestamp}.webm"
+        save_path = target_dir / file_name
+
+        # [3] 파일 물리적 저장
+        with open(save_path, "wb") as buffer:
             shutil.copyfileobj(audio_file.file, buffer)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail="파일 저장 실패")
 
-    try:
-        with open(temp_path, "rb") as audio:
+        # [4] Whisper AI 분석 (숫자 스펠링 프롬프트 추가)
+        with open(save_path, "rb") as audio:
             transcript = client.audio.transcriptions.create(
                 model="whisper-1", 
                 file=audio, 
-                language="en"
+                language="en",
+                prompt="Please transcribe numbers as words, such as 'one', 'two', 'three' instead of '1', '2', '3'."
             )
         
         student_text = transcript.text.lower().strip()
+        
+        # [5] 정답 비교 로직 (기존 유지)
         is_correct = False
         target_main = correct_eng.lower().strip() if correct_eng else ""
         
@@ -125,17 +145,19 @@ async def analyze_smalltalk(
                     is_correct = True
                     break
 
+        print(f"✅ [SmallTalk 저장] {folder_name}/{file_name} : {student_text}")
+
         return {
             "status": "success",
             "transcribed": student_text, 
-            "is_correct": is_correct
+            "is_correct": is_correct,
+            "file_path": str(save_path)
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if temp_path.exists():
-            temp_path.unlink()
 
+    except Exception as e:
+        print(f"🔥 SmallTalk Analyze Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
 # 3. TTS 서비스
 @router.post("/tts")
 async def smalltalk_tts(payload: dict = Body(...)):
@@ -255,3 +277,41 @@ async def complete_smalltalk(payload: FinalCompleteRequest, db = Depends(get_db)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         cursor.close()
+
+@router.post("/generate-smalltalk-summary")
+async def generate_smalltalk_summary(payload: SummaryRequest):
+    try:
+        # [1] 일문일답 데이터를 대화 로그 형식으로 재구성
+        # payload.results에는 [{study_eng: '질문', transcribed: '답변'}, ...] 형태가 들어옵니다.
+        full_conversation = ""
+        for i, res in enumerate(payload.results, 1):
+            if res.transcribed.strip():
+                full_conversation += f"{i}번째 질문({res.study_eng})에 대한 학생의 대답: '{res.transcribed}'\n"
+
+        if not full_conversation:
+            return {"summary": "대화 내용이 확인되지 않아요. 마이크 설정을 확인하고 다시 이야기해볼까요?"}
+
+        # [2] GPT 프롬프트: 일문일답의 '연결성'과 '태도' 분석
+        prompt = (
+            f"다음은 학생과 AI가 나눈 일문일답 영어 대화 기록입니다:\n\n{full_conversation}\n"
+            "--- 분석 지침 ---\n"
+            "1. 학생이 질문의 의도를 파악하고 적절한 대답을 했는지 전체적인 흐름을 봐줘.\n"
+            "2. 단답형이라도 대답을 끝까지 마쳤다면 그 '시도' 자체를 크게 칭찬해줘.\n"
+            "3. '맞다/틀리다'는 표현 대신 '자연스러운 소통', '자신감 있는 표현' 등의 단어를 사용해줘.\n"
+            "4. 아이가 읽었을 때 기분이 좋아지도록 따뜻한 한국어로 3문장 정도 작성해줘. ✨\n"
+            "5. 마지막에 '다음엔 이런 문장도 섞어봐!'라는 가벼운 제안을 하나 덧붙여줘."
+        )
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a friendly and positive English conversation partner for kids."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        return {"summary": response.choices[0].message.content}
+
+    except Exception as e:
+        print(f"🔥 Summary Error: {e}")
+        return {"summary": "오늘 루아이와 대화하느라 정말 고생 많았어요! 우리 다음엔 더 길게 이야기해봐요!"}

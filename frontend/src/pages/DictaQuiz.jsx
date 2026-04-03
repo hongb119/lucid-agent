@@ -39,51 +39,52 @@ const DictaQuiz = ({ words, onLog, onComplete }) => {
         return () => clearInterval(timerRef.current);
     }, [itemNo, cur]);
 
-    // 2. 정답 체크 및 처리 로직
     const handleAnswer = (id) => {
-        if (isAnswered) return; // 이미 풀었으면 클릭 방지
+        if (isAnswered) return;
 
-        clearInterval(timerRef.current); // 시간 멈춤
+        clearInterval(timerRef.current);
         setIsAnswered(true);
         setSelectedId(id);
 
         const isCorrect = parseInt(cur.study_answer) === id;
-        
-        // 결과 데이터 축적
-        const currentData = {
-            study_no: cur.study_no,
-            study_item_no: cur.study_item_no,
-            input_eng: String(id),
-            input_eng_pass: isCorrect ? 'Y' : 'N'
+    
+        // 현재 문항의 로그 생성
+        const currentLogEntry = {
+          study_item_no: cur.study_item_no,
+          try_count: isCorrect ? 1 : 2,
+          taken_time: timer,
+          is_hint_used: 'N'
         };
-        const updatedResults = [...results, currentData];
-        setResults(updatedResults);
 
-        // 상위 컴포넌트로 로그 전송 (시도 횟수 및 실제 소요 시간 포함)
-        onLog({
-            study_item_no: cur.study_item_no,
-            try_count: isCorrect ? 1 : 2,
-            taken_time: timer,
-            is_hint_used: 'N'
-        });
+       // 상위 컴포넌트로 일단 보냄 (기존 로직 유지)
+        onLog(currentLogEntry);
 
-        // 효과음 재생
-        const effectAudio = new Audio(isCorrect ? "/static/study/suc.mp3" : "/static/study/fail.mp3");
-        effectAudio.play();
+       const currentData = {
+        study_no: cur.study_no,
+        study_item_no: cur.study_item_no,
+        input_eng: String(id),
+        input_eng_pass: isCorrect ? 'Y' : 'N'
+       };
+       const updatedResults = [...results, currentData];
+       setResults(updatedResults);
 
-        // 💡 2초 후 다음 문제로 자동 이동 (사용자 편의)
+         const effectAudio = new Audio(isCorrect ? "/static/study/suc.mp3" : "/static/study/fail.mp3");
+         effectAudio.play();
+
         setTimeout(() => {
-            handleNext(updatedResults);
+          // 🚩 [수정] 마지막 문항이라면 현재 로그(currentLogEntry)를 같이 보냅니다.
+           handleNext(updatedResults, currentLogEntry);
         }, 2000);
     };
 
-    const handleNext = (currentResults = results) => {
-        if (itemNo + 1 < words.length) {
-            setItemNo(prev => prev + 1);
-        } else {
-            onComplete(currentResults);
-        }
-    };
+    const handleNext = (currentResults, lastLog) => {
+       if (itemNo + 1 < words.length) {
+        setItemNo(prev => prev + 1);
+       } else {
+        // 🚩 [수정] 부모의 onComplete에 마지막 로그를 인자로 추가 전달
+        onComplete(currentResults, lastLog);
+       }
+   };
 
     const renderQuestion = () => {
         if (!cur || !cur.study_question) return <p>데이터 로딩 중...</p>;

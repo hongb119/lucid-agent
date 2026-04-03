@@ -71,15 +71,25 @@ const PatternDrill = () => {
         setMode('FLASHCARD'); 
     };
 
-    // [6] 패턴드릴(스피킹) 완료 핸들러
-    const handleDrillComplete = (speakingLogs) => {
-        if (speakingLogs && speakingLogs.length > 0) {
-            const correct = speakingLogs.filter(l => l.is_speaking_correct).length;
-            setDrillStats({ correct, wrong: speakingLogs.length - correct });
-            setLogs([...speakingLogs]); 
-            setMode('REPORT'); 
-        }
-    };
+// [6] 패턴드릴(스피킹) 완료 핸들러
+const handleDrillComplete = (finalLogsFromChild) => {
+    // 하위 컴포넌트(Drills)가 이미 서버와 통신해서 분석된 데이터를 가져왔으므로,
+    // 부모는 그 데이터를 받아서 상태만 업데이트하면 끝입니다!
+    if (finalLogsFromChild && finalLogsFromChild.length > 0) {
+        const correct = finalLogsFromChild.filter(l => l.is_speaking_correct).length;
+        
+        setDrillStats({ 
+            correct, 
+            wrong: finalLogsFromChild.length - correct 
+        });
+        
+        setLogs(finalLogsFromChild); // 분석 결과(Target vs You said) 저장
+        setMode('REPORT');           // 리포트 화면으로 이동
+    }
+};
+
+// 텍스트 비교용 청소 함수
+const normalize = (t) => t.toLowerCase().replace(/[^a-z0-9]/g, "").trim();
 
     // [7] 언스크램블 완료 후 처리 (프론트 판정 결과 반영 및 저장)
    

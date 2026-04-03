@@ -17,6 +17,7 @@ const DictaMain = () => {
     const branchCode = queryParams.get('branch_code'); // 지점 코드 추출
 
     const [mode, setMode] = useState('START'); 
+    //const [mode, setMode] = useState('QUIZ');
     const [scrambleWords, setScrambleWords] = useState([]); 
     const [quizWords, setQuizWords] = useState([]);         
     const [taskInfo, setTaskInfo] = useState(null);
@@ -111,53 +112,79 @@ const DictaMain = () => {
         setTrackingLogs(prev => [...prev, logEntry]);
     };
 
-    const handleSaveAndFinish = async (finalInputArray) => {
-        console.log("🚀 [저장 프로세스 시작]");
-        setLoading(true);
+    const handleSaveAndFinish = async (finalInputArray, lastLog) => {
+       
+    setLoading(true);
 
-        try {
-            const totalDuration = studyStartTime ? Math.floor((Date.now() - studyStartTime) / 1000) : 0;
+    try {
+        const totalDuration = studyStartTime ? Math.floor((Date.now() - studyStartTime) / 1000) : 0;
 
-            const cleanedInputArray = (finalInputArray || []).map((item, idx) => ({
-                study_no: Number(item.study_no || taskInfo?.study_no || 0),
-                study_item_no: Number(item.study_item_no || (idx + 1)),
-                input_eng: String(item.input_eng || "-"),
-                input_eng_pass: String(item.input_eng_pass || "N")
-            }));
+        // 1. 현재 퀴즈 세션에 해당하는 문항 번호들 추출 (예: [1,2,3,4,5,6,7,8,9,10])
+        const currentItemNos = quizWords.map(w => Number(w.study_item_no));
 
-            const cleanedLogs = (trackingLogs || []).map(log => ({
-                study_item_no: Number(log.study_item_no),
-                try_count: Number(log.try_count || 1),
-                taken_time: Number(log.taken_time || 0),
-                is_hint_used: String(log.is_hint_used || "N")
-            }));
-
-            const payload = {
-                task_id: Number(taskId),
-                user_id: String(userId),
-                re_study: String(reStudy),
-                re_study_no: Number(taskInfo?.re_study_no || 0),
-                inputArray: cleanedInputArray,
-                tracking_logs: cleanedLogs,
-                total_time: totalDuration
-            };
-
-            // [4] 저장 API 호출 수정: API_BASE 적용
-            const res = await axios.post(`/api/dicta/save-tracking`, payload);
-
-            if (res.data.result_code === "200") {
-                setReportData(res.data); 
-                setMode('TOTAL_FINISH');
-            } else {
-                alert("저장 실패: " + res.data.message);
+        // 2. [핵심] 기존 상태(trackingLogs)에 마지막 로그(lastLog)를 수동으로 결합
+        // 리액트 state 업데이트 속도보다 함수 실행이 빠를 때 발생하는 누락을 방지합니다.
+        let fullLogs = [...trackingLogs];
+        if (lastLog) {
+            // 중복 방지: 이미 목록에 있는지 확인 후 추가
+            const exists = fullLogs.some(l => Number(l.study_item_no) === Number(lastLog.study_item_no));
+            if (!exists) {
+                fullLogs.push(lastLog);
             }
-        } catch (err) {
-            console.error("❌ [저장 에러]:", err);
-            alert("서버 연결에 실패했습니다.");
-        } finally {
-            setLoading(false);
         }
-    };
+
+        // 3. 현재 퀴즈 문항 번호와 일치하는 로그만 필터링 (틀린 문제 다시 풀기 대응)
+        const filteredLogs = fullLogs.filter(log => 
+            currentItemNos.includes(Number(log.study_item_no))
+        );
+
+        console.log("📊 최종 필터링된 로그 개수:", filteredLogs.length);
+
+        // 4. 백엔드 규격에 맞게 데이터 정제 (inputArray)
+        const cleanedInputArray = (finalInputArray || []).map((item, idx) => ({
+            study_no: Number(item.study_no || taskInfo?.study_no || 0),
+            study_item_no: Number(item.study_item_no || (idx + 1)),
+            input_eng: String(item.input_eng || "-"),
+            input_eng_pass: String(item.input_eng_pass || "N")
+        }));
+
+        // 5. 백엔드 규격에 맞게 데이터 정제 (tracking_logs)
+        const cleanedLogs = filteredLogs.map(log => ({
+            study_item_no: Number(log.study_item_no),
+            try_count: Number(log.try_count || 1),
+            taken_time: Number(log.taken_time || 0),
+            is_hint_used: String(log.is_hint_used || "N")
+        }));
+
+        // 6. 전송 페이로드 구성
+        const payload = {
+            task_id: Number(taskId),
+            user_id: String(userId),
+            re_study: String(reStudy),
+            re_study_no: Number(taskInfo?.re_study_no || 0),
+            inputArray: cleanedInputArray,
+            tracking_logs: cleanedLogs,
+            total_time: totalDuration
+        };
+
+        console.log("📤 서버로 보낼 최종 데이터:", payload);
+
+        // 7. API 호출
+        const res = await axios.post(`/api/dicta/save-tracking`, payload);
+
+        if (res.data.result_code === "200") {
+            setReportData(res.data); 
+            setMode('TOTAL_FINISH');
+        } else {
+            alert("저장 실패: " + res.data.message);
+        }
+    } catch (err) {
+        console.error("❌ [저장 에러]:", err);
+        alert("서버 연결에 실패했습니다.");
+    } finally {
+        setLoading(false);
+    }
+   };
 
     if (loading || !taskInfo) return <div className="loading_box">Loading...</div>;
 

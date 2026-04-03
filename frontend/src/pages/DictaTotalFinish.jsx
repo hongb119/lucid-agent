@@ -6,8 +6,8 @@ const DictaTotalFinish = ({ reportData, onRetry, onExit }) => {
     const logs = reportData?.tracking_logs || [];
 
     // 점수 및 오답 개수 계산
-    const totalCount = report?.total || 0;
-    const correctCount = report?.correct || 0;
+    const totalCount = logs.length;
+    const correctCount = logs.filter(log => log.try_count === 1).length;
     const failCount = totalCount - correctCount;
     const score = totalCount > 0 ? Math.round((correctCount / totalCount) * 100) : 0;
 
